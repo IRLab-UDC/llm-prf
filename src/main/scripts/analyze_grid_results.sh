@@ -1,0 +1,253 @@
+#!/bin/bash
+
+# Script to evaluate and analyze grid search results
+# Requires rec_eval to be installed
+#
+# Usage:
+#   ./analyze_grid_results.sh [dataset]
+#   
+# Examples:
+#   ./analyze_grid_results.sh         # Use default dataset
+#   ./analyze_grid_results.sh ap8889  # Use AP8889 dataset
+#   ./analyze_grid_results.sh robust04 # Use ROBUST04 dataset
+
+set -e
+
+# Source shared dataset configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/dataset_config.sh"
+
+# Parse command line arguments
+if [ $# -ge 1 ]; then
+    DATASET_ARG="$1"
+    echo "Switching to dataset: $DATASET_ARG"
+    if ! switch_dataset "$DATASET_ARG"; then
+        exit 1
+    fi
+    echo ""
+fi
+
+# Check if rec_eval is available
+if ! command -v rec_eval &> /dev/null; then
+    echo -e "${YELLOW}Warning: rec_eval not found in PATH${NC}"
+    echo "Please install rec_eval or ensure it's in your PATH"
+    exit 1
+fi
+
+# Validate paths using shared validation function
+if ! validate_paths; then
+    echo -e "${RED}Configuration validation failed.${NC}"
+    echo "Please check that all required files exist for the current dataset configuration."
+    echo ""
+    echo "Current configuration:"
+    show_config
+    echo ""
+    echo "You may need to:"
+    echo "1. Check that the dataset files exist in the expected locations"
+    echo "2. Switch to a different dataset using: source dataset_config.sh && switch_dataset <name>"
+    exit 1
+fi
+
+# Create results directory
+mkdir -p "$RESULTS_DIR"
+
+# Show current configuration
+show_config
+
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}  Grid Search Results Analysis${NC}"
+echo -e "${BLUE}========================================${NC}"
+echo ""
+
+# Discover RF strategies dynamically from run file names
+echo "Discovering RF strategies from run files..."
+RF_STRATEGIES=()
+if [ -d "$RUN_FOLDER" ]; then
+    # Extract unique RF strategies from filenames that match the pattern _rfStrategy-XXXX_rfModel
+    while IFS= read -r strategy; do
+        RF_STRATEGIES+=("$strategy")
+    done < <(find "$RUN_FOLDER" -name "*_rfStrategy-*_rfModel*" -type f | \
+             sed 's/.*_rfStrategy-\([^_]*\).*/\1/' | \
+             sort -u)
+fi
+
+echo "Detected RF strategies: ${RF_STRATEGIES[@]:-none}"
+echo ""
+
+# Initialize summary files
+declare -A SUMMARY_FILES
+SUMMARY_BASELINE="$RESULTS_DIR/summary_baseline.tsv"
+SUMMARY_RERANK="$RESULTS_DIR/summary_monot5_rerank.tsv"
+
+# Create summary files for each detected RF strategy
+for strategy in "${RF_STRATEGIES[@]}"; do
+    # Convert strategy name to lowercase and replace hyphens with underscores for file naming
+    strategy_file=$(echo "$strategy" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+    SUMMARY_FILES["$strategy"]="$RESULTS_DIR/summary_prf_${strategy_file}.tsv"
+done
+
+# Create headers for baseline and reranker
+echo -e "run_name\tmap\tP@10\tndcg@100" > "$SUMMARY_BASELINE"
+echo -e "run_name\tdepth\tmap\tP@10\tndcg@100" > "$SUMMARY_RERANK"
+
+# Create headers for PRF strategies
+for strategy in "${RF_STRATEGIES[@]}"; do
+    echo -e "run_name\tdepth\te\tlambda\tmap\tP@10\tndcg@100" > "${SUMMARY_FILES[$strategy]}"
+done
+
+echo "Evaluating runs..."
+echo ""
+
+# Counter
+TOTAL_RUNS=$(find "$RUN_FOLDER" -type f -name "LMDirichlet*" | wc -l)
+COUNTER=0
+
+# Evaluate each run file
+for run_file in "$RUN_FOLDER"/LMDirichlet*; do
+    if [ -f "$run_file" ]; then
+        COUNTER=$((COUNTER + 1))
+        run_name=$(basename "$run_file")
+        
+        echo -e "${GREEN}[$COUNTER/$TOTAL_RUNS]${NC} Evaluating: $run_name"
+        
+        # Run rec_eval and capture metrics
+        eval_output=$(rec_eval -m map -m P.10 -m ndcg_cut.100 "$QRELS_PATH" "$run_file")
+        
+        # Extract metrics
+        map=$(echo "$eval_output" | grep "^map " | awk '{print $3}')
+        p10=$(echo "$eval_output" | grep "^P_10 " | awk '{print $3}')
+        ndcg100=$(echo "$eval_output" | grep "^ndcg_cut_100 " | awk '{print $3}')
+        
+        # Parse run name to extract parameters and classify
+        if [[ "$run_name" =~ ^LMDirichlet-[0-9]+_title_only$ ]]; then
+            # Baseline (no reranking, no PRF)
+            echo -e "$run_name\t$map\t$p10\t$ndcg100" >> "$SUMMARY_BASELINE"
+            
+        elif [[ "$run_name" =~ rerank-monot5_depth-([0-9]+) ]]; then
+            # MonoT5 Reranker (no PRF)
+            depth="${BASH_REMATCH[1]}"
+            echo -e "$run_name\t$depth\t$map\t$p10\t$ndcg100" >> "$SUMMARY_RERANK"
+            
+        elif [[ "$run_name" =~ _rfStrategy-([^_]+)_rfModel.*topK-([0-9]+)_lambda-([0-9.]+)_e-([0-9]+) ]]; then
+            # PRF with detected strategy
+            strategy="${BASH_REMATCH[1]}"
+            depth="${BASH_REMATCH[2]}"
+            lambda="${BASH_REMATCH[3]}"
+            e="${BASH_REMATCH[4]}"
+            
+            # Check if this strategy was detected and has a summary file
+            if [[ -n "${SUMMARY_FILES[$strategy]}" ]]; then
+                echo -e "$run_name\t$depth\t$e\t$lambda\t$map\t$p10\t$ndcg100" >> "${SUMMARY_FILES[$strategy]}"
+            else
+                echo -e "${YELLOW}Warning: Unknown RF strategy '$strategy' in file: $run_name${NC}"
+            fi
+        fi
+    fi
+done
+
+echo ""
+echo -e "${GREEN}✓${NC} Evaluation completed"
+echo ""
+
+# Find best configurations
+echo -e "${BLUE}=== Best Configurations ===${NC}"
+echo ""
+
+# Function to display best config
+show_best() {
+    local file=$1
+    local strategy=$2
+    local metric_col=$3
+    local metric_name=$4
+    
+    if [ ! -f "$file" ] || [ $(wc -l < "$file") -le 1 ]; then
+        return
+    fi
+    
+    echo -e "${YELLOW}Best $strategy (by $metric_name):${NC}"
+    tail -n +2 "$file" | sort -t$'\t' -k$metric_col -rn | head -1 | \
+        awk -F'\t' -v cols=$(head -1 "$file" | awk -F'\t' '{print NF}') \
+        '{if (cols == 4) printf "  MAP=%.4f, P@10=%.4f, ndcg@100=%.4f\n", $2, $3, $4; 
+          else if (cols == 5) printf "  depth=%s -> MAP=%.4f, P@10=%.4f, ndcg@100=%.4f\n", $2, $3, $4, $5;
+          else printf "  depth=%s, e=%s, lambda=%s -> MAP=%.4f, P@10=%.4f, ndcg@100=%.4f\n", $2, $3, $4, $5, $6, $7}'
+}
+
+# Baseline
+if [ -f "$SUMMARY_BASELINE" ] && [ $(wc -l < "$SUMMARY_BASELINE") -gt 1 ]; then
+    echo -e "${YELLOW}Baseline (LM Dirichlet):${NC}"
+    tail -n +2 "$SUMMARY_BASELINE" | awk -F'\t' '{printf "  MAP=%.4f, P@10=%.4f, ndcg@100=%.4f\n", $2, $3, $4}'
+    echo ""
+fi
+
+# MonoT5 Reranker
+show_best "$SUMMARY_RERANK" "MonoT5 Reranker" "3" "MAP"
+echo ""
+
+# Dynamic PRF strategies
+for strategy in "${RF_STRATEGIES[@]}"; do
+    summary_file="${SUMMARY_FILES[$strategy]}"
+    if [ -f "$summary_file" ] && [ $(wc -l < "$summary_file") -gt 1 ]; then
+        # Create a human-readable strategy name
+        strategy_display=$(echo "$strategy" | sed 's/-/ /g')
+        show_best "$summary_file" "PRF + $strategy_display filter" "5" "MAP"
+        echo ""
+    fi
+done
+
+echo -e "${BLUE}========================================${NC}"
+echo ""
+echo "Summary files created:"
+echo "  - $SUMMARY_BASELINE"
+echo "  - $SUMMARY_RERANK"
+
+# List dynamic PRF strategy files
+for strategy in "${RF_STRATEGIES[@]}"; do
+    summary_file="${SUMMARY_FILES[$strategy]}"
+    if [ -f "$summary_file" ]; then
+        echo "  - $summary_file"
+    fi
+done
+
+echo ""
+echo "Additional visualization options:"
+echo "  - Excel/LibreOffice Calc (import TSV files)"
+echo "  - R ggplot2"
+echo "  - Custom Python scripts with pandas/matplotlib"
+echo ""
+
+# Generate comprehensive Markdown report
+echo -e "${BLUE}Generating comprehensive Markdown report...${NC}"
+PYTHON_REPORT_PATH="../python/generate_report.py"
+PYTHON_VISUAL_PATH="../python/visualize_grid_results.py"
+
+if [ -f "$PYTHON_REPORT_PATH" ]; then
+    # Extract collection name from INDEX (remove trailing path elements)
+    COLLECTION_NAME=$(basename "$INDEX_PATH")
+    python3 "$PYTHON_REPORT_PATH" "$COLLECTION_NAME"
+    echo ""
+    echo -e "${GREEN}✓ Markdown report generated!${NC}"
+    echo "Report available at: $RESULTS_DIR/GRID_SEARCH_REPORT.md"
+    echo ""
+else
+    echo -e "${YELLOW}Warning: Report generator not found at $PYTHON_REPORT_PATH${NC}"
+    echo "To generate a comprehensive report, run:"
+    echo "  python3 ../python/generate_report.py $(basename "$INDEX_PATH")"
+    echo ""
+fi
+
+# Generate visualizations
+echo -e "${BLUE}Generating visualizations...${NC}"
+if [ -f "$PYTHON_VISUAL_PATH" ]; then
+    COLLECTION_NAME=$(basename "$INDEX_PATH")
+    python3 "$PYTHON_VISUAL_PATH" "$COLLECTION_NAME"
+    echo ""
+    echo -e "${GREEN}✓ Visualizations generated!${NC}"
+    echo "Plots available at: $RESULTS_DIR/plots/"
+else
+    echo -e "${YELLOW}Warning: Visualization generator not found at $PYTHON_VISUAL_PATH${NC}"
+    echo "To generate visualizations, run:"
+    echo "  python3 ../python/visualize_grid_results.py $(basename "$INDEX_PATH")"
+fi
+echo ""
+
+echo -e "${GREEN}✓ Complete analysis finished!${NC}"
