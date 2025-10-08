@@ -98,52 +98,140 @@ done
 echo "Evaluating runs..."
 echo ""
 
-# Counter
-TOTAL_RUNS=$(find "$RUN_FOLDER" -type f -name "LMDirichlet*" | wc -l)
-COUNTER=0
+# Detect number of CPU cores
+NUM_CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+echo "Detected $NUM_CORES CPU cores, using parallel evaluation..."
+echo ""
 
-# Evaluate each run file
-for run_file in "$RUN_FOLDER"/LMDirichlet*; do
-    if [ -f "$run_file" ]; then
-        COUNTER=$((COUNTER + 1))
-        run_name=$(basename "$run_file")
+# Count total runs
+TOTAL_RUNS=$(find "$RUN_FOLDER" -type f -name "LMDirichlet*" | wc -l)
+echo "Total runs to evaluate: $TOTAL_RUNS"
+echo ""
+
+# Create temporary directory for partial results
+TEMP_DIR="$RESULTS_DIR/temp_eval_$$"
+mkdir -p "$TEMP_DIR"
+
+# Function to evaluate a single run (exported for parallel execution)
+evaluate_run() {
+    local run_file=$1
+    local QRELS_PATH=$2
+    local TEMP_DIR=$3
+    
+    if [ ! -f "$run_file" ]; then
+        return
+    fi
+    
+    local run_name=$(basename "$run_file")
+    
+    # Run rec_eval and capture metrics
+    local eval_output=$(rec_eval -m map -m P.10 -m ndcg_cut.100 "$QRELS_PATH" "$run_file" 2>/dev/null)
+    
+    # Extract metrics
+    local map=$(echo "$eval_output" | grep "^map " | awk '{print $3}')
+    local p10=$(echo "$eval_output" | grep "^P_10 " | awk '{print $3}')
+    local ndcg100=$(echo "$eval_output" | grep "^ndcg_cut_100 " | awk '{print $3}')
+    
+    # Parse run name to extract parameters and classify
+    if [[ "$run_name" =~ ^LMDirichlet-[0-9]+_title_only$ ]]; then
+        # Baseline (no reranking, no PRF)
+        echo -e "$run_name\t$map\t$p10\t$ndcg100" >> "$TEMP_DIR/baseline.tsv"
         
-        echo -e "${GREEN}[$COUNTER/$TOTAL_RUNS]${NC} Evaluating: $run_name"
+    elif [[ "$run_name" =~ rerank-monot5_depth-([0-9]+) ]]; then
+        # MonoT5 Reranker (no PRF)
+        local depth="${BASH_REMATCH[1]}"
+        echo -e "$run_name\t$depth\t$map\t$p10\t$ndcg100" >> "$TEMP_DIR/rerank.tsv"
         
-        # Run rec_eval and capture metrics
-        eval_output=$(rec_eval -m map -m P.10 -m ndcg_cut.100 "$QRELS_PATH" "$run_file")
+    elif [[ "$run_name" =~ _rfStrategy-([^_]+)_rfModel.*topK-([0-9]+)_lambda-([0-9.]+)_e-([0-9]+) ]]; then
+        # PRF with detected strategy
+        local strategy="${BASH_REMATCH[1]}"
+        local depth="${BASH_REMATCH[2]}"
+        local lambda="${BASH_REMATCH[3]}"
+        local e="${BASH_REMATCH[4]}"
         
-        # Extract metrics
-        map=$(echo "$eval_output" | grep "^map " | awk '{print $3}')
-        p10=$(echo "$eval_output" | grep "^P_10 " | awk '{print $3}')
-        ndcg100=$(echo "$eval_output" | grep "^ndcg_cut_100 " | awk '{print $3}')
+        # Convert strategy name for filename
+        local strategy_file=$(echo "$strategy" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+        echo -e "$run_name\t$depth\t$e\t$lambda\t$map\t$p10\t$ndcg100" >> "$TEMP_DIR/prf_${strategy_file}.tsv"
+    fi
+}
+
+# Export function and variables for parallel execution
+export -f evaluate_run
+export QRELS_PATH
+export TEMP_DIR
+
+# Check if GNU parallel is available
+if command -v parallel &> /dev/null; then
+    echo "Using GNU parallel for evaluation..."
+    echo ""
+    find "$RUN_FOLDER" -type f -name "LMDirichlet*" | \
+        parallel -j "$NUM_CORES" --progress --bar evaluate_run {} "$QRELS_PATH" "$TEMP_DIR"
+else
+    echo "Using xargs for parallel evaluation (install GNU parallel for better progress tracking)..."
+    echo "  sudo apt install parallel  # Ubuntu/Debian"
+    echo "  sudo yum install parallel  # CentOS/RHEL"
+    echo ""
+    
+    # Create a progress tracker
+    echo "0" > "$TEMP_DIR/counter.txt"
+    
+    # Modified evaluate function with progress
+    evaluate_run_with_progress() {
+        local run_file=$1
+        local QRELS_PATH=$2
+        local TEMP_DIR=$3
+        local TOTAL_RUNS=$4
         
-        # Parse run name to extract parameters and classify
-        if [[ "$run_name" =~ ^LMDirichlet-[0-9]+_title_only$ ]]; then
-            # Baseline (no reranking, no PRF)
-            echo -e "$run_name\t$map\t$p10\t$ndcg100" >> "$SUMMARY_BASELINE"
+        # Call original evaluation
+        evaluate_run "$run_file" "$QRELS_PATH" "$TEMP_DIR"
+        
+        # Update counter (using file lock)
+        (
+            flock -x 200
+            local count=$(cat "$TEMP_DIR/counter.txt")
+            count=$((count + 1))
+            echo "$count" > "$TEMP_DIR/counter.txt"
             
-        elif [[ "$run_name" =~ rerank-monot5_depth-([0-9]+) ]]; then
-            # MonoT5 Reranker (no PRF)
-            depth="${BASH_REMATCH[1]}"
-            echo -e "$run_name\t$depth\t$map\t$p10\t$ndcg100" >> "$SUMMARY_RERANK"
-            
-        elif [[ "$run_name" =~ _rfStrategy-([^_]+)_rfModel.*topK-([0-9]+)_lambda-([0-9.]+)_e-([0-9]+) ]]; then
-            # PRF with detected strategy
-            strategy="${BASH_REMATCH[1]}"
-            depth="${BASH_REMATCH[2]}"
-            lambda="${BASH_REMATCH[3]}"
-            e="${BASH_REMATCH[4]}"
-            
-            # Check if this strategy was detected and has a summary file
-            if [[ -n "${SUMMARY_FILES[$strategy]}" ]]; then
-                echo -e "$run_name\t$depth\t$e\t$lambda\t$map\t$p10\t$ndcg100" >> "${SUMMARY_FILES[$strategy]}"
-            else
-                echo -e "${YELLOW}Warning: Unknown RF strategy '$strategy' in file: $run_name${NC}"
+            # Print progress every 10 runs or at start/end
+            if [ $((count % 10)) -eq 0 ] || [ $count -eq 1 ] || [ $count -eq $TOTAL_RUNS ]; then
+                echo "  Progress: $count/$TOTAL_RUNS runs evaluated ($(($count * 100 / $TOTAL_RUNS))%)"
             fi
-        fi
+        ) 200>"$TEMP_DIR/counter.lock"
+    }
+    
+    export -f evaluate_run_with_progress
+    export TOTAL_RUNS
+    
+    find "$RUN_FOLDER" -type f -name "LMDirichlet*" | \
+        xargs -P "$NUM_CORES" -I {} bash -c 'evaluate_run_with_progress "$@"' _ {} "$QRELS_PATH" "$TEMP_DIR" "$TOTAL_RUNS"
+    
+    # Clean up progress files
+    rm -f "$TEMP_DIR/counter.txt" "$TEMP_DIR/counter.lock"
+fi
+
+echo ""
+echo "Consolidating results..."
+
+# Consolidate results from temporary files
+if [ -f "$TEMP_DIR/baseline.tsv" ]; then
+    cat "$TEMP_DIR/baseline.tsv" >> "$SUMMARY_BASELINE"
+fi
+
+if [ -f "$TEMP_DIR/rerank.tsv" ]; then
+    cat "$TEMP_DIR/rerank.tsv" >> "$SUMMARY_RERANK"
+fi
+
+# Consolidate PRF strategy results
+for strategy in "${RF_STRATEGIES[@]}"; do
+    strategy_file=$(echo "$strategy" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+    temp_file="$TEMP_DIR/prf_${strategy_file}.tsv"
+    if [ -f "$temp_file" ]; then
+        cat "$temp_file" >> "${SUMMARY_FILES[$strategy]}"
     fi
 done
+
+# Clean up temporary directory
+rm -rf "$TEMP_DIR"
 
 echo ""
 echo -e "${GREEN}✓${NC} Evaluation completed"

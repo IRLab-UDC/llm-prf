@@ -76,7 +76,8 @@ fi
 
 
 # Calculate total experiments
-TOTAL_PRF=$((${#DEPTHS[@]} * ${#E_VALUES[@]} * ${#RF_STRATEGY_VALUES[@]} * ${#LAMBDA_VALUES[@]}))
+# Now PRF uses grid search mode, so it's just one Java call per RF strategy
+TOTAL_PRF=${#RF_STRATEGY_VALUES[@]}  # One grid search per strategy
 TOTAL_BASELINE=1  # LMDirichlet baseline
 if [ "$SKIP_RERANK" = true ]; then
     TOTAL_RERANK=0
@@ -86,9 +87,14 @@ else
     TOTAL_EXPERIMENTS=$((TOTAL_BASELINE + TOTAL_PRF + TOTAL_RERANK))
 fi
 
-echo -e "Total experiments to run: ${GREEN}$TOTAL_EXPERIMENTS${NC}"
+# Calculate total grid configurations for informational purposes
+GRID_CONFIGS=$((${#DEPTHS[@]} * ${#E_VALUES[@]} * ${#LAMBDA_VALUES[@]}))
+TOTAL_PRF_CONFIGS=$((GRID_CONFIGS * ${#RF_STRATEGY_VALUES[@]}))
+
+echo -e "Grid Search Mode: ${GREEN}ENABLED${NC} (opening index once per strategy)"
+echo -e "Total Java invocations: ${GREEN}$TOTAL_EXPERIMENTS${NC}"
 echo "  - Baseline: $TOTAL_BASELINE"
-echo "  - PRF: $TOTAL_PRF"
+echo "  - PRF Grid Searches: $TOTAL_PRF (covering $TOTAL_PRF_CONFIGS configurations)"
 if [ "$SKIP_RERANK" = true ]; then
     echo -e "  - MonoT5 Reranker: ${YELLOW}SKIPPED${NC}"
 else
@@ -155,11 +161,18 @@ else
 fi
 
 echo ""
-echo -e "${BLUE}=== Part 3: PRF with LLM Strategies ===${NC}"
+echo -e "${BLUE}=== Part 3: PRF with LLM Strategies (Grid Search Mode) ===${NC}"
 echo ""
 
-# Run PRF  experiments
+# Build parameter strings for grid search
+DEPTHS_STR=$(IFS=,; echo "${DEPTHS[*]}")
+E_VALUES_STR=$(IFS=,; echo "${E_VALUES[*]}")
+LAMBDA_VALUES_STR=$(IFS=,; echo "${LAMBDA_VALUES[*]}")
+
+# Run PRF experiments with internal grid search (one Java invocation per strategy)
 for RF_STRATEGY in "${RF_STRATEGY_VALUES[@]}"; do
+    COUNTER=$((COUNTER + 1))
+    
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}  ${RF_STRATEGY} Grid Search Experiment${NC}"
     echo -e "${BLUE}========================================${NC}"
@@ -173,50 +186,33 @@ for RF_STRATEGY in "${RF_STRATEGY_VALUES[@]}"; do
     echo "  RF Strategy: $RF_STRATEGY"
     echo ""
     echo "Grid parameters:"
-    echo "  Depths: ${DEPTHS[@]}"
-    echo "  E values: ${E_VALUES[@]}"
-    echo "  Lambda values: ${LAMBDA_VALUES[@]}"
+    echo "  Depths: $DEPTHS_STR"
+    echo "  E values: $E_VALUES_STR"
+    echo "  Lambda values: $LAMBDA_VALUES_STR"
     echo ""
-
-    for depth in "${DEPTHS[@]}"; do
-        for e in "${E_VALUES[@]}"; do
-            for lambda in "${LAMBDA_VALUES[@]}"; do
-                COUNTER=$((COUNTER + 1))
-                
-                # Calculate progress
-                ELAPSED=$(($(date +%s) - START_TIME))
-                if [ $COUNTER -gt 1 ]; then
-                    AVG_TIME=$((ELAPSED / (COUNTER - 1)))
-                    REMAINING=$((AVG_TIME * (TOTAL_EXPERIMENTS - COUNTER)))
-                    ETA=$(date -d@$REMAINING -u +%H:%M:%S)
-                else
-                    ETA="calculating..."
-                fi
-
-                echo -e "${GREEN}[$COUNTER/$TOTAL_EXPERIMENTS]${NC} Running ${RF_STRATEGY} PRF: depth=$depth, e=$e, lambda=$lambda (ETA: $ETA)"
-
-                java -cp "$JAR_PATH" org.irlab.prfllm.searcher.TRECSearcherLucene \
-                    --index_path "$INDEX_PATH" \
-                    --topics_path "$TOPICS_PATH" \
-                    --qrels_path "$QRELS_PATH" \
-                    --cache_dir "$CACHE_DIR" \
-                    --trec_run_folder "$RUN_FOLDER" \
-                    --search_by "$SEARCH_BY" \
-                    --mu $MU \
-                    --rerank_method prf \
-                    --rf_strategy "$RF_STRATEGY" \
-                    --rf_model "$RF_MODEL" \
-                    --prf_smoothing_model "$PRF_SMOOTHING" \
-                    --prf_smoothing_parameter $PRF_SMOOTHING_PARAM \
-                    --rerank_depth $depth \
-                    -e $e \
-                    --lambda $lambda
-                
-                echo -e "${GREEN}✓${NC} Completed depth=$depth, e=$e, lambda=$lambda"
-                echo ""
-            done
-        done
-    done
+    
+    echo -e "${GREEN}[$COUNTER/$((TOTAL_BASELINE + 1 + ${#RF_STRATEGY_VALUES[@]}))]${NC} Running ${RF_STRATEGY} PRF grid search..."
+    
+    java -cp "$JAR_PATH" org.irlab.prfllm.searcher.TRECSearcherLucene \
+        --index_path "$INDEX_PATH" \
+        --topics_path "$TOPICS_PATH" \
+        --qrels_path "$QRELS_PATH" \
+        --cache_dir "$CACHE_DIR" \
+        --trec_run_folder "$RUN_FOLDER" \
+        --search_by "$SEARCH_BY" \
+        --mu $MU \
+        --rerank_method prf \
+        --rf_strategy "$RF_STRATEGY" \
+        --rf_model "$RF_MODEL" \
+        --prf_smoothing_model "$PRF_SMOOTHING" \
+        --prf_smoothing_parameter $PRF_SMOOTHING_PARAM \
+        --grid_search \
+        --depths "$DEPTHS_STR" \
+        --e_values "$E_VALUES_STR" \
+        --lambdas "$LAMBDA_VALUES_STR"
+    
+    echo -e "${GREEN}✓${NC} Completed ${RF_STRATEGY} grid search"
+    echo ""
 done
 
 # Final summary
@@ -232,12 +228,13 @@ echo -e "${GREEN}  Grid Search Completed!${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 echo "Summary:"
-echo "  Total experiments: $TOTAL_EXPERIMENTS"
+echo "  Total Java invocations: $TOTAL_EXPERIMENTS"
+echo "  Total configurations: $((TOTAL_BASELINE + TOTAL_RERANK + TOTAL_PRF_CONFIGS))"
 if [ "$SKIP_RERANK" = true ]; then
     echo "  (MonoT5 Reranker experiments were skipped)"
 fi
 echo "  Total time: ${HOURS}h ${MINUTES}m ${SECONDS}s"
-echo "  Average time per experiment: $((TOTAL_TIME / TOTAL_EXPERIMENTS))s"
+echo "  Average time per invocation: $((TOTAL_TIME / TOTAL_EXPERIMENTS))s"
 echo ""
 echo "Results saved in: $RUN_FOLDER"
 echo ""

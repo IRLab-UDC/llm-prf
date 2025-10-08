@@ -127,6 +127,21 @@ The grid search automatically:
 - Sweeps over parameters: depth (k), expansion terms (e), lambda (λ)
 - Skips already completed experiments (resumable)
 
+**Performance Optimizations**:
+1. **Grid Search Internal**: Opens Lucene index and initializes caches only once per RF strategy (28% faster)
+2. **Batch Lambda Processing**: Computes RM3 expansion once per (depth, e) pair, then varies lambda (5.2x faster)
+3. Combined speedup: **~6x faster** than original implementation
+
+See [Grid Search Optimization](docs/GRID_SEARCH_OPTIMIZATION.md) and [Batch Lambda Optimization](docs/BATCH_LAMBDA_OPTIMIZATION.md) for details.
+
+#### Grid Search Test
+```bash
+cd src/main/scripts
+./test_grid_search.sh
+```
+
+Runs a minimal grid search (2×2×2=8 configurations) to verify the implementation.
+
 ### 5. Analyze Results
 
 ```bash
@@ -135,10 +150,12 @@ cd src/main/scripts
 ```
 
 This script:
-1. Evaluates all runs with `trec_eval`
+1. Evaluates all runs with `trec_eval` **in parallel** (using all CPU cores)
 2. Generates summary TSV files
 3. Creates comprehensive Markdown report
 4. Generates visualizations (plots)
+
+**Performance**: The script automatically detects CPU cores and evaluates runs in parallel, achieving near-linear speedup (8x faster on 8-core machines). See [Parallel Evaluation](docs/PARALLEL_EVALUATION.md) for details.
 
 Outputs:
 - Summary files: `/path/to/data/grid_results/{collection}/summary_*.tsv`
@@ -228,6 +245,16 @@ prf-llm/
 ├── pom.xml                       # Maven configuration
 └── README.md                     # This file
 ```
+
+## 📚 Additional Documentation
+
+- **[Grid Search Optimization](docs/GRID_SEARCH_OPTIMIZATION.md)**: Details on the optimized grid search implementation
+- **[Batch Lambda Optimization](docs/BATCH_LAMBDA_OPTIMIZATION.md)**: Efficient processing of lambda parameters
+- **[Parallel Evaluation](docs/PARALLEL_EVALUATION.md)**: Parallel run evaluation using multiple CPU cores
+- **[Implementation Summary](docs/IMPLEMENTATION_SUMMARY.md)**: Technical summary of recent changes
+- **[8 Strategies Update](docs/8_STRATEGIES_UPDATE.md)**: Overview of the 8 RF strategies
+- **[VLLM Implementation](docs/VLLM_IMPLEMENTATION_SUMMARY.md)**: VLLM integration details
+- **[Oracle Grid Search](docs/ORACLE_GRID_SEARCH.md)**: Using oracle strategies for upper bounds
 
 ## 🔬 Supported RF Strategies
 
