@@ -30,7 +30,7 @@ for arg in "$@"; do
         --skip-rerank)
             SKIP_RERANK=true
             ;;
-        ap8889|robust04)
+        ap8889|robust04|dl19)
             echo "Switching to dataset: $arg"
             if ! switch_dataset "$arg"; then
                 exit 1

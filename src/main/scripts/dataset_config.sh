@@ -9,6 +9,7 @@ FOLDER="/home/javier/data/"
 # Dataset definitions (array format: index_name topics_file qrels_file)
 declare -a AP8889=("ap8889_index" "topics.101-200" "qrels_ap8889_101_200.txt")
 declare -a ROBUST04=("robust04_index" "topics.301-350.trec.txt" "qrels.robust04.300-450.601-700.trec.txt")
+declare -a DL19=("msmarco_index" "topics.dl-19.trec" "qrels.dl19-passage.nist.trec.txt")
 
 # Select active dataset (change this to switch datasets)
 # Options: DATASET=("${AP8889[@]}") or DATASET=("${ROBUST04[@]}")
@@ -48,7 +49,7 @@ PRF_SMOOTHING="Additive"
 PRF_SMOOTHING_PARAM=0.1
 
 # JAR path (relative to scripts directory)
-JAR_PATH="../../../target/prf-llm-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
+JAR_PATH="../prf-llm-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
 
 # Function to switch dataset
 switch_dataset() {
@@ -59,6 +60,9 @@ switch_dataset() {
             ;;
         "robust04"|"ROBUST04")
             DATASET=("${ROBUST04[@]}")
+            ;;
+        "dl19"|"DL19")
+          DATASET=("${DL19[@]}")
             ;;
         *)
             echo -e "${RED}Error: Unknown dataset '$dataset_name'. Available: ap8889, robust04${NC}"
