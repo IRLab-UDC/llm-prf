@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xmlns="http://maven.apache.org/POM/4.0.0"
-    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+         xmlns="http://maven.apache.org/POM/4.0.0"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <groupId>org.irlab</groupId>
     <artifactId>prf-llm</artifactId>
@@ -65,17 +65,17 @@
             <version>${fastutil.version}</version>
         </dependency>
         <dependency>
-
-    <groupId>com.fasterxml.jackson.core</groupId>
-
-    <artifactId>jackson-databind</artifactId>
-
-    <version>2.15.2</version>
-
-</dependency>
-
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.15.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.13.2</version>
+        </dependency>
     </dependencies>
-    
+
     <build>
         <plugins>
             <!-- Maven Assembly Plugin to create fat JAR with dependencies -->
