@@ -40,7 +40,7 @@ for arg in "$@"; do
         *)
             echo "Unknown argument: $arg"
             echo "Usage: $0 [dataset] [--skip-rerank]"
-            echo "Available datasets: ap8889, robust04"
+            echo "Available datasets: ap8889, robust04, dl19"
             exit 1
             ;;
     esac

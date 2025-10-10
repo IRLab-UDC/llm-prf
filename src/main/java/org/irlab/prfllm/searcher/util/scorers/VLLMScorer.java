@@ -19,7 +19,7 @@ import java.util.Map;
  */
 public class VLLMScorer {
 
-    private static final String SERVICE_URL = "http://orome:8080/probabilidad";
+    private static final String SERVICE_URL = "http://namo:8080/probabilidad";
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
     /**

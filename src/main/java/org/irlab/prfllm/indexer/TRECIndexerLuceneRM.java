@@ -65,7 +65,28 @@ public class TRECIndexerLuceneRM {
         indexDocs(writer, f);
       }
     } else {
-      indexDocMsMarco(writer, file);
+      // Detect format: MS MARCO (JSON) vs TREC (XML)
+      if (isMsMarcoFormat(file)) {
+        System.out.println("Detected MS MARCO format (JSON): " + file.getName());
+        indexDocMsMarco(writer, file);
+      } else {
+        System.out.println("Detected TREC format (XML): " + file.getName());
+        indexDoc(writer, file);
+      }
+    }
+  }
+
+  // Helper method to detect if file is MS MARCO JSON format
+  private static boolean isMsMarcoFormat(File file) throws IOException {
+    try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+      String firstLine = reader.readLine();
+      if (firstLine == null || firstLine.trim().isEmpty()) {
+        return false;
+      }
+      // MS MARCO files start with JSON objects containing "id" and "contents"
+      // TREC files typically start with <DOC> or other XML tags
+      return firstLine.trim().startsWith("{") && 
+             (firstLine.contains("\"id\"") || firstLine.contains("\"contents\""));
     }
   }
 
