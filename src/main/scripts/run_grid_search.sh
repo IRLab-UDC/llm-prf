@@ -8,7 +8,7 @@
 #    - depth: 5, 10, 25, 50, 75, 100
 #    - e (expansion terms): 5, 10, 15, 20, 25, 30
 #    - lambda (interpolation): 0.1 to 0.9 in steps of 0.1
-#    - RF strategies: VLLM, VLLM-PROB, MONOT5, MONOT5-PROB, OLLAMA
+#    - RF strategies: RAW RM3, VLLM, VLLM-PROB, MONOT5, MONOT5-PROB, OLLAMA
 #
 # Usage:
 #   ./run_grid_search.sh [dataset] [options]
@@ -73,8 +73,6 @@ if ! curl -s http://127.0.0.1:5000/health > /dev/null 2>&1; then
     fi
 fi
 
-
-
 # Calculate total experiments
 # Now PRF uses grid search mode, so it's just one Java call per RF strategy
 TOTAL_PRF=${#RF_STRATEGY_VALUES[@]}  # One grid search per strategy
@@ -119,12 +117,12 @@ echo -e "${GREEN}[$COUNTER/$TOTAL_EXPERIMENTS]${NC} Running baseline LMDirichlet
 java -cp "$JAR_PATH" org.irlab.prfllm.searcher.TRECSearcherLucene \
     --index_path "$INDEX_PATH" \
     --topics_path "$TOPICS_PATH" \
-    --qrels_path "$QRELS_PATH" \
-    --cache_dir "$CACHE_DIR" \
     --trec_run_folder "$RUN_FOLDER" \
+    --qrels_path "$QRELS_PATH" \
     --search_by "$SEARCH_BY" \
-    --mu $MU \
-    --rerank_method none
+    --rerank_method none \
+    --prf_strategy none \
+    --mu $MU
 
 echo -e "${GREEN}✓${NC} Completed baseline LMDirichlet"
 echo ""
@@ -144,13 +142,13 @@ if [ "$SKIP_RERANK" = false ]; then
             --index_path "$INDEX_PATH" \
             --topics_path "$TOPICS_PATH" \
             --qrels_path "$QRELS_PATH" \
-            --cache_dir "$CACHE_DIR" \
             --trec_run_folder "$RUN_FOLDER" \
             --search_by "$SEARCH_BY" \
-            --mu $MU \
             --rerank_method monot5 \
-            --rerank_depth $depth
-        
+            --rerank_depth $depth \
+            --cache_dir "$CACHE_DIR" \
+            --mu $MU
+
         echo -e "${GREEN}✓${NC} Completed MonoT5 Reranker depth=$depth"
         echo ""
     done
@@ -202,7 +200,7 @@ for RF_STRATEGY in "${RF_STRATEGY_VALUES[@]}"; do
         --search_by "$SEARCH_BY" \
         --mu $MU \
         --rerank_method prf \
-        --rf_strategy "$RF_STRATEGY" \
+        --prf_strategy "$RF_STRATEGY" \
         --rf_model "$RF_MODEL" \
         --prf_smoothing_model "$PRF_SMOOTHING" \
         --prf_smoothing_parameter $PRF_SMOOTHING_PARAM \

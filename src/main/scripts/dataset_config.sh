@@ -7,7 +7,7 @@
 FOLDER="/home/javier/data/"
 
 # Dataset definitions (array format: index_name topics_file qrels_file)
-declare -a AP8889=("ap8889_index" "topics.101-200" "qrels_ap8889_101_200.txt")
+declare -a AP8889=("ap8889_index" "topics.51-100" "qrels.AP8889.51-100")
 declare -a ROBUST04=("robust04_index" "topics.301-350.trec.txt" "qrels.robust04.300-450.601-700.trec.txt")
 declare -a DL19=("msmarco_index" "topics.dl-19.trec" "qrels.dl19-passage.nist.trec.txt")
 
@@ -38,7 +38,7 @@ NC='\033[0m' # No Color
 # Grid search parameters (used by run_grid_search.sh)
 DEPTHS=(100 5 10 25 50 75)
 E_VALUES=(5 10 15 20 25 30)
-RF_STRATEGY_VALUES=("VLLM" "VLLM-PROB" "ORACLE" "ORACLE-K" "MONOT5" "MONOT5-PROB" "PRF")
+RF_STRATEGY_VALUES=("PRF" "MONOT5" "MONOT5-PROB" "VLLM" "VLLM-PROB" "ORACLE" "ORACLE-K")
 LAMBDA_VALUES=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
 
 # Model parameters

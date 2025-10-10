@@ -131,14 +131,14 @@ evaluate_run() {
     local map=$(echo "$eval_output" | grep "^map " | awk '{print $3}')
     local p10=$(echo "$eval_output" | grep "^P_10 " | awk '{print $3}')
     local ndcg100=$(echo "$eval_output" | grep "^ndcg_cut_100 " | awk '{print $3}')
-    
+
     # Parse run name to extract parameters and classify
     if [[ "$run_name" =~ ^LMDirichlet-[0-9]+_title_only$ ]]; then
         # Baseline (no reranking, no PRF)
         echo -e "$run_name\t$map\t$p10\t$ndcg100" >> "$TEMP_DIR/baseline.tsv"
         
-    elif [[ "$run_name" =~ rerank-monot5_depth-([0-9]+) ]]; then
-        # MonoT5 Reranker (no PRF)
+    elif [[ "$run_name" =~ .*rerank-mono[tT]5_topK-([0-9]+) ]]; then
+        # Check if it's not a PRF file
         local depth="${BASH_REMATCH[1]}"
         echo -e "$run_name\t$depth\t$map\t$p10\t$ndcg100" >> "$TEMP_DIR/rerank.tsv"
         
