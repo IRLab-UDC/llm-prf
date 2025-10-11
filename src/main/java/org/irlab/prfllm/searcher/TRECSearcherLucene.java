@@ -2,7 +2,6 @@ package org.irlab.prfllm.searcher;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
-import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -360,9 +359,40 @@ public class TRECSearcherLucene {
                                             OllamaCache ollamaCache, VLLMCache vllmCache, int startConfig,
                                             int totalConfigs, int currentSkipped) throws Exception {
 
+    // First, check which lambda values actually need processing (BEFORE computing RM3!)
+    List<Double> neededLambdas = new ArrayList<>();
+    for (double lambda : lambdas) {
+      String runName = String.format(
+          "LMDirichlet-%.0f_%s_prf-%s_rfStrategy-%s_rfModel-%s_prfSmoothing-%s-%.4f_topK-%d_lambda-%.2f_e-%d",
+          dirichletMu, searchBy, true, rfStrategy, rfModel, prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
+
+      String trecRunPath = trecRunFolder + "/" + runName;
+      java.io.File outputFile = new java.io.File(trecRunPath);
+
+      if (!outputFile.exists()) {
+        neededLambdas.add(lambda);
+      }
+    }
+
+    // If all files exist, skip this entire (depth, e) combination
+    if (neededLambdas.isEmpty()) {
+      System.out.println(String.format("  All %d lambda configs exist for depth=%d, e=%d - skipping RM3 computation",
+          lambdas.length, depth, e));
+      for (int i = 0; i < lambdas.length; i++) {
+        int configNum = startConfig + i + 1;
+        System.out.println(
+            String.format("  [%d/%d] SKIPPING (exists): lambda=%.2f", configNum, totalConfigs, lambdas[i]));
+      }
+      return; // Early exit - don't compute anything
+    }
+
+    // Report which lambdas need processing
+    System.out.println(String.format("  Need to process %d/%d lambda values for depth=%d, e=%d", neededLambdas.size(),
+        lambdas.length, depth, e));
+
     // Collect all results first: Map from lambda -> Map from topicNum -> TopDocs
     Map<Double, Map<String, TopDocs>> allResults = new HashMap<>();
-    for (double lambda : lambdas) {
+    for (double lambda : neededLambdas) {
       allResults.put(lambda, new HashMap<>());
     }
 
@@ -395,8 +425,8 @@ public class TRECSearcherLucene {
       }
       TermWeights originalQueryWeights = TermWeights.fromTerms(processedTerms).scaleToL1Norm();
 
-      // For each lambda value, interpolate and search
-      for (double lambda : lambdas) {
+      // For each lambda value that needs processing, interpolate and search
+      for (double lambda : neededLambdas) {
         // Interpolate original query with expanded query
 
         TermWeights finalQuery = TermWeights.interpolate(originalQueryWeights, expandedQueryWeights, lambda);
@@ -434,9 +464,8 @@ public class TRECSearcherLucene {
 
       String trecRunPath = trecRunFolder + "/" + runName;
 
-      // Check if output file already exists
-      java.io.File outputFile = new java.io.File(trecRunPath);
-      if (outputFile.exists()) {
+      // Check if this lambda was in neededLambdas (i.e., file didn't exist at start)
+      if (!neededLambdas.contains(lambda)) {
         System.out.println(String.format("  [%d/%d] SKIPPING (exists): lambda=%.2f", configNum, totalConfigs, lambda));
         continue;
       }
@@ -456,6 +485,7 @@ public class TRECSearcherLucene {
 
       runWriter.close();
     }
+
 
     System.out.println(String.format("  ✓ Completed all lambdas for depth=%d, e=%d", depth, e));
   }

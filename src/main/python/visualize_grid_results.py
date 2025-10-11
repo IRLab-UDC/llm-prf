@@ -139,6 +139,8 @@ def plot_lambda_impact(df, metric='map', strategy=''):
         for e in sorted(df['e'].unique()):
             subset = df[(df['depth'] == depth) & (df['e'] == e)]
             if len(subset) > 0:
+                # Sort by lambda to avoid back-and-forth lines
+                subset = subset.sort_values('lambda')
                 plt.plot(subset['lambda'], subset[metric], 
                         marker='o', alpha=0.6, 
                         label=f'd={int(depth)}, e={int(e)}')
@@ -165,6 +167,8 @@ def plot_e_impact(df, metric='map', strategy=''):
         for lambda_val in [0.3, 0.5, 0.7]:  # Selected lambda values
             subset = df[(df['depth'] == depth) & (df['lambda'] == lambda_val)]
             if len(subset) > 0:
+                # Sort by e to avoid back-and-forth lines
+                subset = subset.sort_values('e')
                 plt.plot(subset['e'], subset[metric], 
                         marker='o', alpha=0.6,
                         label=f'd={int(depth)}, λ={lambda_val}')
@@ -188,12 +192,16 @@ def plot_depth_impact(df, metric='map', strategy=''):
     
     # Best lambda and e for each depth
     best_per_depth = df.loc[df.groupby('depth')[metric].idxmax()]
+    # Sort by depth to avoid back-and-forth lines
+    best_per_depth = best_per_depth.sort_values('depth')
     
     plt.plot(best_per_depth['depth'], best_per_depth[metric], 
             marker='o', linewidth=2, markersize=10, label='Best config per depth')
     
     # Average performance per depth
     avg_per_depth = df.groupby('depth')[metric].mean()
+    # Sort index to ensure proper ordering
+    avg_per_depth = avg_per_depth.sort_index()
     plt.plot(avg_per_depth.index, avg_per_depth.values, 
             marker='s', linewidth=2, markersize=8, label='Average per depth', alpha=0.7)
     
