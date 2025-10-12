@@ -3,6 +3,13 @@
     "configurations": [
         {
             "type": "java",
+            "name": "TRECIndexerLuceneRM",
+            "request": "launch",
+            "mainClass": "org.irlab.prfllm.indexer.TRECIndexerLuceneRM",
+            "projectName": "prf-llm"
+        },
+        {
+            "type": "java",
             "name": "TRECSearcherLucene",
             "request": "launch",
             "mainClass": "org.irlab.prfllm.searcher.TRECSearcherLucene",

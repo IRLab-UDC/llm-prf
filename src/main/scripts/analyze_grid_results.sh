@@ -50,6 +50,7 @@ fi
 
 # Create results directory
 mkdir -p "$RESULTS_DIR"
+mkdir -p "$RESULTS_DIR/per_query"
 
 # Show current configuration
 show_config
@@ -124,13 +125,16 @@ evaluate_run() {
     
     local run_name=$(basename "$run_file")
     
-    # Run rec_eval and capture metrics
+    # Run rec_eval and capture metrics (aggregate)
     local eval_output=$(rec_eval -m map -m P.10 -m ndcg_cut.100 "$QRELS_PATH" "$run_file" 2>/dev/null)
     
     # Extract metrics
     local map=$(echo "$eval_output" | grep "^map " | awk '{print $3}')
     local p10=$(echo "$eval_output" | grep "^P_10 " | awk '{print $3}')
     local ndcg100=$(echo "$eval_output" | grep "^ndcg_cut_100 " | awk '{print $3}')
+    
+    # Also get per-query MAP for robustness index calculation (saved to separate file)
+    rec_eval -q -m map "$QRELS_PATH" "$run_file" 2>/dev/null | grep -v "^map\s*all" > "$TEMP_DIR/perquery_${run_name}.txt"
 
     # Parse run name to extract parameters and classify
     if [[ "$run_name" =~ ^LMDirichlet-[0-9]+_title_only$ ]]; then
@@ -211,6 +215,11 @@ fi
 
 echo ""
 echo "Consolidating results..."
+
+# Move per-query results to permanent location
+if compgen -G "$TEMP_DIR/perquery_*.txt" > /dev/null; then
+    mv "$TEMP_DIR"/perquery_*.txt "$RESULTS_DIR/per_query/" 2>/dev/null || true
+fi
 
 # Consolidate results from temporary files
 if [ -f "$TEMP_DIR/baseline.tsv" ]; then
@@ -303,10 +312,26 @@ echo "  - R ggplot2"
 echo "  - Custom Python scripts with pandas/matplotlib"
 echo ""
 
-# Generate comprehensive Markdown report
+# Generate visualizations FIRST (before report, so images exist!)
+echo -e "${BLUE}Generating visualizations...${NC}"
+PYTHON_VISUAL_PATH="../python/visualize_grid_results.py"
+if [ -f "$PYTHON_VISUAL_PATH" ]; then
+    COLLECTION_NAME=$(basename "$INDEX_PATH")
+    python3 "$PYTHON_VISUAL_PATH" "$COLLECTION_NAME"
+    echo ""
+    echo -e "${GREEN}✓ Visualizations generated!${NC}"
+    echo "Plots available at: $RESULTS_DIR/plots/"
+    echo ""
+else
+    echo -e "${YELLOW}Warning: Visualization generator not found at $PYTHON_VISUAL_PATH${NC}"
+    echo "To generate visualizations, run:"
+    echo "  python3 ../python/visualize_grid_results.py $(basename "$INDEX_PATH")"
+    echo ""
+fi
+
+# Generate comprehensive Markdown report (AFTER visualizations, so it can embed images!)
 echo -e "${BLUE}Generating comprehensive Markdown report...${NC}"
 PYTHON_REPORT_PATH="../python/generate_report.py"
-PYTHON_VISUAL_PATH="../python/visualize_grid_results.py"
 
 if [ -f "$PYTHON_REPORT_PATH" ]; then
     # Extract collection name from INDEX (remove trailing path elements)
@@ -315,6 +340,53 @@ if [ -f "$PYTHON_REPORT_PATH" ]; then
     echo ""
     echo -e "${GREEN}✓ Markdown report generated!${NC}"
     echo "Report available at: $RESULTS_DIR/GRID_SEARCH_REPORT.md"
+    
+    # Generate HTML version with pandoc if available
+    if command -v pandoc &> /dev/null; then
+        echo ""
+        echo -e "${BLUE}Converting report to HTML...${NC}"
+        pandoc "$RESULTS_DIR/GRID_SEARCH_REPORT.md" \
+            -f markdown \
+            -t html \
+            --standalone \
+            --self-contained \
+            --embed-resources \
+            --metadata title="Grid Search Results Report" \
+            --toc \
+            --toc-depth=3 \
+            -c <(echo "
+                body { max-width: 1400px; margin: 40px auto; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.6; color: #333; }
+                h1, h2, h3, h4 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-top: 30px; }
+                h4 { border-bottom: 1px solid #95a5a6; font-size: 1.1em; }
+                table { border-collapse: collapse; width: 100%; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+                th { background-color: #3498db; color: white; padding: 12px; text-align: left; font-weight: 600; }
+                td { padding: 10px; border-bottom: 1px solid #ddd; }
+                tr:hover { background-color: #f5f5f5; }
+                code { background-color: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: 'Courier New', monospace; }
+                pre { background-color: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
+                a { color: #3498db; text-decoration: none; }
+                a:hover { text-decoration: underline; }
+                img { max-width: 70%; height: auto; border: 1px solid #ddd; border-radius: 5px; margin: 20px auto; box-shadow: 0 4px 8px rgba(0,0,0,0.1); display: block; }
+                figure { text-align: center; margin: 30px 0; }
+                figcaption { font-style: italic; color: #666; margin-top: 10px; }
+                #TOC { background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin-bottom: 30px; }
+                #TOC ul { list-style-type: none; }
+                #TOC a { color: #2c3e50; }
+                @media print { body { max-width: 100%; } img { max-width: 80%; page-break-inside: avoid; } }
+            ") \
+            -o "$RESULTS_DIR/GRID_SEARCH_REPORT.html"
+        
+        echo -e "${GREEN}✓ HTML report generated!${NC}"
+        echo "HTML report available at: $RESULTS_DIR/GRID_SEARCH_REPORT.html"
+        echo ""
+        echo "Open in browser with:"
+        echo "  xdg-open $RESULTS_DIR/GRID_SEARCH_REPORT.html"
+    else
+        echo -e "${YELLOW}Note: pandoc not found - HTML version not generated${NC}"
+        echo "To install pandoc:"
+        echo "  sudo apt install pandoc  # Ubuntu/Debian"
+        echo "  sudo yum install pandoc  # CentOS/RHEL"
+    fi
     echo ""
 else
     echo -e "${YELLOW}Warning: Report generator not found at $PYTHON_REPORT_PATH${NC}"
@@ -322,20 +394,5 @@ else
     echo "  python3 ../python/generate_report.py $(basename "$INDEX_PATH")"
     echo ""
 fi
-
-# Generate visualizations
-echo -e "${BLUE}Generating visualizations...${NC}"
-if [ -f "$PYTHON_VISUAL_PATH" ]; then
-    COLLECTION_NAME=$(basename "$INDEX_PATH")
-    python3 "$PYTHON_VISUAL_PATH" "$COLLECTION_NAME"
-    echo ""
-    echo -e "${GREEN}✓ Visualizations generated!${NC}"
-    echo "Plots available at: $RESULTS_DIR/plots/"
-else
-    echo -e "${YELLOW}Warning: Visualization generator not found at $PYTHON_VISUAL_PATH${NC}"
-    echo "To generate visualizations, run:"
-    echo "  python3 ../python/visualize_grid_results.py $(basename "$INDEX_PATH")"
-fi
-echo ""
 
 echo -e "${GREEN}✓ Complete analysis finished!${NC}"

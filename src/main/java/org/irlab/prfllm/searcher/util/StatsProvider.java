@@ -194,7 +194,7 @@ public final class  StatsProvider {
 
         try {
 
-            return termvectors.get(doc,field);
+            return termvectors.get(doc, field);
         } catch (final IOException e) {
 
             LOG.error(e.getMessage());

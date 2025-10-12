@@ -30,7 +30,7 @@ for arg in "$@"; do
         --skip-rerank)
             SKIP_RERANK=true
             ;;
-        ap8889|robust04|dl19)
+        ap8889|robust04|dl19|wt10g)
             echo "Switching to dataset: $arg"
             if ! switch_dataset "$arg"; then
                 exit 1
@@ -40,7 +40,7 @@ for arg in "$@"; do
         *)
             echo "Unknown argument: $arg"
             echo "Usage: $0 [dataset] [--skip-rerank]"
-            echo "Available datasets: ap8889, robust04, dl19"
+            echo "Available datasets: ap8889, robust04, wt10g, dl19"
             exit 1
             ;;
     esac

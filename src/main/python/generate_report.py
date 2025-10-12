@@ -26,6 +26,56 @@ def get_results_dir(collection_name=None):
         # Default to ap8889_index for backward compatibility
         return base_dir / "ap8889_index"
 
+def load_per_query_map(results_dir, run_name):
+    """Load per-query MAP scores for a run."""
+    per_query_file = results_dir / "per_query" / f"perquery_{run_name}.txt"
+    if not per_query_file.exists():
+        return None
+    
+    query_scores = {}
+    with open(per_query_file, 'r') as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) >= 3 and parts[0] == 'map':
+                query_id = parts[1]
+                score = float(parts[2])
+                query_scores[query_id] = score
+    
+    return query_scores
+
+def calculate_robustness_index(results_dir, run_name, baseline_name):
+    """
+    Calculate Robustness Index (RI) comparing a run to baseline.
+    RI = (num_improved - num_hurt) / total_queries
+    
+    Returns: (RI, num_improved, num_hurt, total_queries) or None if data not available
+    """
+    run_scores = load_per_query_map(results_dir, run_name)
+    baseline_scores = load_per_query_map(results_dir, baseline_name)
+    
+    if run_scores is None or baseline_scores is None:
+        return None
+    
+    # Find common queries
+    common_queries = set(run_scores.keys()) & set(baseline_scores.keys())
+    if len(common_queries) == 0:
+        return None
+    
+    num_improved = 0
+    num_hurt = 0
+    
+    for qid in common_queries:
+        diff = run_scores[qid] - baseline_scores[qid]
+        if diff > 0:
+            num_improved += 1
+        elif diff < 0:
+            num_hurt += 1
+    
+    total_queries = len(common_queries)
+    ri = (num_improved - num_hurt) / total_queries
+    
+    return (ri, num_improved, num_hurt, total_queries)
+
 def get_file_paths(results_dir):
     """Get all file paths for a given results directory."""
     return {
@@ -107,21 +157,33 @@ def generate_parameter_ranges(data):
         if key in data:
             df = data[key]
             strategy_name = key.replace('prf_', '').upper().replace('_', '-')
+            
+            # Convert numpy types to native Python types for clean display
+            depths = [int(x) for x in sorted(df['depth'].unique())]
+            e_values = [int(x) for x in sorted(df['e'].unique())]
+            lambdas = [float(x) for x in sorted(df['lambda'].unique())]
+            
             lines.append(f"### PRF {strategy_name}")
-            lines.append(f"- **Depths (k)**: {sorted(df['depth'].unique())}")
-            lines.append(f"- **Expansion terms (e)**: {sorted(df['e'].unique())}")
-            lines.append(f"- **Lambda (λ)**: {sorted(df['lambda'].unique())}\n")
+            lines.append(f"- **Depths (k)**: {depths}")
+            lines.append(f"- **Expansion terms (e)**: {e_values}")
+            lines.append(f"- **Lambda (λ)**: {lambdas}\n")
     
     # Reranker
     if 'rerank' in data:
+        depths = [int(x) for x in sorted(data['rerank']['depth'].unique())]
         lines.append("### MonoT5 Reranker")
-        lines.append(f"- **Depths**: {sorted(data['rerank']['depth'].unique())}\n")
+        lines.append(f"- **Depths**: {depths}\n")
     
     return lines
 
-def generate_best_configurations(data):
-    """Generate best configurations section."""
+def generate_best_configurations(data, results_dir):
+    """Generate best configurations section with Robustness Index."""
     lines = ["## Best Configurations by Strategy\n"]
+    
+    # Get baseline run name if available
+    baseline_name = None
+    if 'baseline' in data and len(data['baseline']) > 0:
+        baseline_name = data['baseline'].iloc[0]['run_name']
     
     for metric in ['map', 'P@10', 'ndcg@100']:
         lines.append(f"### By {metric.upper()}\n")
@@ -139,7 +201,18 @@ def generate_best_configurations(data):
             lines.append(f"**Best MonoT5 Rerank:**")
             lines.append(f"- Depth: {best_rerank['depth']:.0f}")
             lines.append(f"- **{metric.upper()}**: {best_rerank[metric]:.4f}")
-            lines.append(f"- MAP: {best_rerank['map']:.4f}, P@10: {best_rerank['P@10']:.4f}, ndcg@100: {best_rerank['ndcg@100']:.4f}\n")
+            lines.append(f"- MAP: {best_rerank['map']:.4f}, P@10: {best_rerank['P@10']:.4f}, ndcg@100: {best_rerank['ndcg@100']:.4f}")
+            
+            # Add Robustness Index if baseline available
+            if baseline_name:
+                ri_result = calculate_robustness_index(results_dir, best_rerank['run_name'], baseline_name)
+                if ri_result:
+                    ri, num_improved, num_hurt, total = ri_result
+                    lines.append(f"- **Robustness Index**: {ri:.4f} ({num_improved}↑ / {num_hurt}↓ / {total} queries)\n")
+                else:
+                    lines.append("")
+            else:
+                lines.append("")
         
         # PRF strategies
         prf_strategies = [
@@ -161,7 +234,18 @@ def generate_best_configurations(data):
                 lines.append(f"- Expansion terms (e): {best['e']:.0f}")
                 lines.append(f"- Lambda (λ): {best['lambda']:.2f}")
                 lines.append(f"- **{metric.upper()}**: {best[metric]:.4f}")
-                lines.append(f"- MAP: {best['map']:.4f}, P@10: {best['P@10']:.4f}, ndcg@100: {best['ndcg@100']:.4f}\n")
+                lines.append(f"- MAP: {best['map']:.4f}, P@10: {best['P@10']:.4f}, ndcg@100: {best['ndcg@100']:.4f}")
+                
+                # Add Robustness Index if baseline available
+                if baseline_name:
+                    ri_result = calculate_robustness_index(results_dir, best['run_name'], baseline_name)
+                    if ri_result:
+                        ri, num_improved, num_hurt, total = ri_result
+                        lines.append(f"- **Robustness Index**: {ri:.4f} ({num_improved}↑ / {num_hurt}↓ / {total} queries)\n")
+                    else:
+                        lines.append("")
+                else:
+                    lines.append("")
         
         # Comparison table
         if 'baseline' in data and len(data['baseline']) > 0:
@@ -261,12 +345,15 @@ def generate_parameter_analysis(df, strategy_name):
     
     return lines
 
-def generate_report(data):
+def generate_report(data, results_dir, collection_name=None):
     """Generate complete report."""
     report = []
     
+    # Extract dataset name from collection_name
+    dataset_display = collection_name.replace('_index', '').upper() if collection_name else "Unknown"
+    
     # Header
-    report.append("# Grid Search Results Report")
+    report.append(f"# Grid Search Results Report - {dataset_display}")
     report.append(f"\n**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
     # Overview
@@ -276,7 +363,7 @@ def generate_report(data):
     report.extend(generate_parameter_ranges(data))
     
     # Best configurations
-    report.extend(generate_best_configurations(data))
+    report.extend(generate_best_configurations(data, results_dir))
     
     # Top-10 configurations for each PRF strategy
     report.append("## Top Configurations by Strategy\n")
@@ -308,40 +395,136 @@ def generate_report(data):
     
     if 'baseline' in data and len(data['baseline']) > 0:
         baseline_map = data['baseline']['map'].iloc[0]
+        baseline_name = data['baseline'].iloc[0]['run_name']
         
         report.append("### Performance Summary (MAP)\n")
-        report.append("| Strategy | Best MAP | Avg MAP | Improvement vs Baseline |")
-        report.append("|----------|----------|---------|------------------------|")
-        report.append(f"| Baseline | {baseline_map:.4f} | {baseline_map:.4f} | - |")
+        report.append("| Strategy | Best MAP | Avg MAP | Improvement | RI (Best) |")
+        report.append("|----------|----------|---------|-------------|-----------|")
+        report.append(f"| Baseline | {baseline_map:.4f} | {baseline_map:.4f} | - | - |")
         
         if 'rerank' in data and len(data['rerank']) > 0:
+            best_idx = data['rerank']['map'].idxmax()
             best = data['rerank']['map'].max()
             avg = data['rerank']['map'].mean()
             improvement = ((best - baseline_map) / baseline_map) * 100
-            report.append(f"| MonoT5 Rerank | {best:.4f} | {avg:.4f} | {improvement:+.2f}% |")
+            
+            # Calculate RI for best config
+            best_run_name = data['rerank'].loc[best_idx, 'run_name']
+            ri_result = calculate_robustness_index(results_dir, best_run_name, baseline_name)
+            ri_str = f"{ri_result[0]:.3f}" if ri_result else "N/A"
+            
+            report.append(f"| MonoT5 Rerank | {best:.4f} | {avg:.4f} | {improvement:+.2f}% | {ri_str} |")
         
         for key, name in prf_strategies:
             if key in data and len(data[key]) > 0:
+                best_idx = data[key]['map'].idxmax()
                 best = data[key]['map'].max()
                 avg = data[key]['map'].mean()
                 improvement = ((best - baseline_map) / baseline_map) * 100
-                report.append(f"| {name} | {best:.4f} | {avg:.4f} | {improvement:+.2f}% |")
+                
+                # Calculate RI for best config
+                best_run_name = data[key].loc[best_idx, 'run_name']
+                ri_result = calculate_robustness_index(results_dir, best_run_name, baseline_name)
+                ri_str = f"{ri_result[0]:.3f}" if ri_result else "N/A"
+                
+                report.append(f"| {name} | {best:.4f} | {avg:.4f} | {improvement:+.2f}% | {ri_str} |")
         report.append("")
     
-    # Visualizations
+    # Visualizations with embedded images
     report.append("## Visualizations\n")
-    report.append("The following plots are available in `grid_results/plots/`:\n")
-    report.append("### Overall Comparison")
-    report.append("- `comparison_all_strategies_map.png`")
-    report.append("- `comparison_all_strategies_P@10.png`")
-    report.append("- `comparison_all_strategies_ndcg@100.png`\n")
     
-    report.append("### Strategy-Specific Analysis")
-    report.append("For each PRF strategy (PRF, MONOT5, MONOT5-PROB, OLLAMA, VLLM, VLLM-PROB, ORACLE, ORACLE-K):")
-    report.append("- `lambda_impact_{metric}_{strategy}.png` - Impact of lambda parameter")
-    report.append("- `e_impact_{metric}_{strategy}.png` - Impact of expansion terms")
-    report.append("- `depth_impact_{metric}_{strategy}.png` - Impact of depth")
-    report.append("- `heatmap_depth_e_{metric}_{strategy}.png` - 2D parameter interaction\n")
+    # Check if plots directory exists
+    plots_dir = results_dir / "plots"
+    has_plots = plots_dir.exists()
+    
+    if has_plots:
+        report.append("### Overall Strategy Comparison\n")
+        
+        # Overall comparison plots
+        for metric in ['map', 'P@10', 'ndcg@100']:
+            plot_file = f"comparison_all_strategies_{metric}.png"
+            plot_path = plots_dir / plot_file
+            if plot_path.exists():
+                report.append(f"#### {metric.upper()} Comparison\n")
+                report.append(f'<img src="plots/{plot_file}" alt="{metric.upper()} Comparison" width="800">\n')
+        
+        # Strategy-specific plots
+        report.append("### Strategy-Specific Parameter Analysis\n")
+        
+        # List available strategies from plots directory
+        strategy_plots = {}
+        if plots_dir.exists():
+            for plot_file in plots_dir.glob("lambda_impact_*.png"):
+                # Extract strategy from filename: lambda_impact_map_prf.png -> prf
+                parts = plot_file.stem.split('_')
+                if len(parts) >= 4:
+                    metric = parts[2]
+                    strategy = '_'.join(parts[3:])
+                    if strategy not in strategy_plots:
+                        strategy_plots[strategy] = []
+                    strategy_plots[strategy].append((metric, 'lambda'))
+            
+            for plot_file in plots_dir.glob("e_impact_*.png"):
+                parts = plot_file.stem.split('_')
+                if len(parts) >= 4:
+                    metric = parts[2]
+                    strategy = '_'.join(parts[3:])
+                    if strategy not in strategy_plots:
+                        strategy_plots[strategy] = []
+                    strategy_plots[strategy].append((metric, 'e'))
+            
+            for plot_file in plots_dir.glob("depth_impact_*.png"):
+                parts = plot_file.stem.split('_')
+                if len(parts) >= 4:
+                    metric = parts[2]
+                    strategy = '_'.join(parts[3:])
+                    if strategy not in strategy_plots:
+                        strategy_plots[strategy] = []
+                    strategy_plots[strategy].append((metric, 'depth'))
+            
+            for plot_file in plots_dir.glob("heatmap_*.png"):
+                parts = plot_file.stem.split('_')
+                if len(parts) >= 5:
+                    metric = parts[3]
+                    strategy = '_'.join(parts[4:])
+                    if strategy not in strategy_plots:
+                        strategy_plots[strategy] = []
+                    strategy_plots[strategy].append((metric, 'heatmap'))
+        
+        # Display plots organized by strategy
+        for strategy in sorted(strategy_plots.keys()):
+            strategy_name = strategy.upper().replace('_', '-')
+            report.append(f"#### Strategy: {strategy_name}\n")
+            
+            # Lambda impact
+            for metric in ['map', 'P@10', 'ndcg@100']:
+                plot_file = f"lambda_impact_{metric}_{strategy}.png"
+                if (plots_dir / plot_file).exists():
+                    report.append(f"**Lambda Impact on {metric.upper()}**\n")
+                    report.append(f'<img src="plots/{plot_file}" alt="Lambda Impact {metric.upper()}" width="800">\n')
+            
+            # E impact
+            for metric in ['map', 'P@10', 'ndcg@100']:
+                plot_file = f"e_impact_{metric}_{strategy}.png"
+                if (plots_dir / plot_file).exists():
+                    report.append(f"**Expansion Terms (e) Impact on {metric.upper()}**\n")
+                    report.append(f'<img src="plots/{plot_file}" alt="E Impact {metric.upper()}" width="800">\n')
+            
+            # Depth impact
+            for metric in ['map', 'P@10', 'ndcg@100']:
+                plot_file = f"depth_impact_{metric}_{strategy}.png"
+                if (plots_dir / plot_file).exists():
+                    report.append(f"**Depth Impact on {metric.upper()}**\n")
+                    report.append(f'<img src="plots/{plot_file}" alt="Depth Impact {metric.upper()}" width="800">\n')
+            
+            # Heatmaps
+            for metric in ['map', 'P@10', 'ndcg@100']:
+                plot_file = f"heatmap_depth_e_{metric}_{strategy}.png"
+                if (plots_dir / plot_file).exists():
+                    report.append(f"**Depth vs E Heatmap ({metric.upper()})**\n")
+                    report.append(f'<img src="plots/{plot_file}" alt="Heatmap {metric.upper()}" width="800">\n')
+    else:
+        report.append("*Plots will be generated in `grid_results/plots/` after running `visualize_grid_results.py`*\n")
     
     return "\n".join(report)
 
@@ -380,7 +563,7 @@ def main():
         print(f"Expected files in: {results_dir}")
         return
     
-    report = generate_report(data)
+    report = generate_report(data, results_dir, collection_name)
     
     with open(file_paths['report_file'], 'w') as f:
         f.write(report)

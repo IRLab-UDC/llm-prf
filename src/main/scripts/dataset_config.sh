@@ -7,10 +7,10 @@
 FOLDER="/home/javier/data/"
 
 # Dataset definitions (array format: index_name topics_file qrels_file)
-declare -a AP8889=("ap8889_index" "topics.51-100" "qrels.AP8889.51-100")
-declare -a ROBUST04=("robust04_index" "topics.301-350.trec.txt" "qrels.robust04.300-450.601-700.trec.txt")
+declare -a AP8889=("ap8889_index" "topics.51-100" "qrels.AP8889.51-100" "topics.101-200" "qrels_ap8889_101_200.txt")
+declare -a ROBUST04=("robust04_index" "topics.301-350.trec.txt" "qrels.robust04.300-450.601-700.trec.txt" "topics.351-400.trec.txt" "qrels.robust04.300-450.601-700.trec.txt")
 declare -a DL19=("msmarco_index" "topics.dl-19.trec" "qrels.dl19-passage.nist.trec.txt")
-
+declare -a WT10G=("wt10g_index" "topics.451-500.trec.txt" "qrels.trec9.main_web")
 # Select active dataset (change this to switch datasets)
 # Options: DATASET=("${AP8889[@]}") or DATASET=("${ROBUST04[@]}")
 DATASET=("${AP8889[@]}")  # Currently set to AP8889
@@ -19,6 +19,8 @@ DATASET=("${AP8889[@]}")  # Currently set to AP8889
 INDEX="${DATASET[0]}"
 TOPICS="${DATASET[1]}"
 QRELS="${DATASET[2]}"
+TOPICS_TEST="${DATASET[3]}"
+QRELS_TEST="${DATASET[4]}"
 
 # Construct full paths
 INDEX_PATH="${FOLDER}/indices/${INDEX}"
@@ -61,11 +63,14 @@ switch_dataset() {
         "robust04"|"ROBUST04")
             DATASET=("${ROBUST04[@]}")
             ;;
+        "wt10g"|"WT10G")
+            DATASET=("${WT10G[@]}")
+            ;;
         "dl19"|"DL19")
           DATASET=("${DL19[@]}")
             ;;
         *)
-            echo -e "${RED}Error: Unknown dataset '$dataset_name'. Available: ap8889, robust04${NC}"
+            echo -e "${RED}Error: Unknown dataset '$dataset_name'. Available: ap8889, dl19, wt10g, robust04${NC}"
             return 1
             ;;
     esac
@@ -74,9 +79,13 @@ switch_dataset() {
     INDEX="${DATASET[0]}"
     TOPICS="${DATASET[1]}"
     QRELS="${DATASET[2]}"
+    TOPICS_TEST="${DATASET[3]}"
+    QRELS_TEST="${DATASET[4]}"
     INDEX_PATH="${FOLDER}/indices/${INDEX}"
     TOPICS_PATH="${FOLDER}/topics/${TOPICS}"
     QRELS_PATH="${FOLDER}/topics/${QRELS}"
+    TOPICS_TEST_PATH="${FOLDER}/topics/${TOPICS_TEST}"
+    QRELS_TEST_PATH="${FOLDER}/topics/${QRELS_TEST}"
     RUN_FOLDER="${FOLDER}/runs/${INDEX}"
     RESULTS_DIR="${FOLDER}/grid_results/${INDEX}"
     CACHE_DIR="${FOLDER}/cache/${INDEX}"

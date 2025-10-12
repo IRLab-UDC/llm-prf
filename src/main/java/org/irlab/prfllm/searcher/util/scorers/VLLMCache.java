@@ -65,6 +65,20 @@ public class VLLMCache {
 
         return result;
     }
+    
+    /**
+     * Returns the number of entries in the cache.
+     */
+    public int size() {
+        return cache.size();
+    }
+    
+    /**
+     * Returns true if the cache is empty (no entries loaded).
+     */
+    public boolean isEmpty() {
+        return cache.isEmpty();
+    }
 
     public void close() throws IOException {
         if (cacheWriter != null) {

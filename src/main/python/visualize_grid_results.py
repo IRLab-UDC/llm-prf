@@ -20,6 +20,9 @@ import sys
 import re
 import subprocess
 from pathlib import Path
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib import cm
+from scipy.interpolate import griddata
 
 def get_results_dir(collection_name=None):
     """Get results directory based on collection name or from config."""
@@ -131,7 +134,7 @@ def load_data():
     
     return data
 
-def plot_lambda_impact(df, metric='map', strategy=''):
+def plot_lambda_impact(df, metric='map', strategy='', dataset=''):
     """Plot impact of lambda on performance."""
     plt.figure(figsize=(14, 8))
     
@@ -150,6 +153,8 @@ def plot_lambda_impact(df, metric='map', strategy=''):
     title = f'Impact of Lambda on {metric.upper()}'
     if strategy:
         title += f' (PRF {strategy})'
+    if dataset:
+        title += f' - {dataset}'
     plt.title(title, fontsize=14)
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', ncol=2, fontsize=8)
     plt.grid(True, alpha=0.3)
@@ -158,7 +163,7 @@ def plot_lambda_impact(df, metric='map', strategy=''):
     plt.savefig(PLOTS_DIR / filename, dpi=300, bbox_inches='tight')
     plt.close()
 
-def plot_e_impact(df, metric='map', strategy=''):
+def plot_e_impact(df, metric='map', strategy='', dataset=''):
     """Plot impact of e (expansion terms) on performance."""
     plt.figure(figsize=(14, 8))
     
@@ -178,6 +183,8 @@ def plot_e_impact(df, metric='map', strategy=''):
     title = f'Impact of Expansion Terms on {metric.upper()}'
     if strategy:
         title += f' (PRF {strategy})'
+    if dataset:
+        title += f' - {dataset}'
     plt.title(title, fontsize=14)
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
     plt.grid(True, alpha=0.3)
@@ -186,7 +193,7 @@ def plot_e_impact(df, metric='map', strategy=''):
     plt.savefig(PLOTS_DIR / filename, dpi=300, bbox_inches='tight')
     plt.close()
 
-def plot_depth_impact(df, metric='map', strategy=''):
+def plot_depth_impact(df, metric='map', strategy='', dataset=''):
     """Plot impact of depth on performance."""
     plt.figure(figsize=(14, 8))
     
@@ -210,6 +217,8 @@ def plot_depth_impact(df, metric='map', strategy=''):
     title = f'Impact of Depth on {metric.upper()}'
     if strategy:
         title += f' (PRF {strategy})'
+    if dataset:
+        title += f' - {dataset}'
     plt.title(title, fontsize=14)
     plt.legend()
     plt.grid(True, alpha=0.3)
@@ -218,7 +227,7 @@ def plot_depth_impact(df, metric='map', strategy=''):
     plt.savefig(PLOTS_DIR / filename, dpi=300, bbox_inches='tight')
     plt.close()
 
-def plot_heatmap(df, metric='map', strategy=''):
+def plot_heatmap(df, metric='map', strategy='', dataset=''):
     """Plot heatmap for different parameter combinations."""
     # Average over lambda for simplicity
     pivot_data = df.groupby(['depth', 'e'])[metric].mean().reset_index()
@@ -232,11 +241,173 @@ def plot_heatmap(df, metric='map', strategy=''):
     title = f'{metric.upper()} Heatmap: Depth vs E (averaged over λ)'
     if strategy:
         title += f' (PRF {strategy})'
+    if dataset:
+        title += f' - {dataset}'
     plt.title(title, fontsize=14)
     plt.tight_layout()
     filename = f'heatmap_depth_e_{metric}_{strategy}.png' if strategy else f'heatmap_depth_e_{metric}.png'
     plt.savefig(PLOTS_DIR / filename, dpi=300, bbox_inches='tight')
     plt.close()
+
+def plot_3d_surface(df, metric='map', strategy='', dataset=''):
+    """
+    Plot 3D surface showing the interaction between depth, e, and lambda.
+    Creates multiple views for better understanding of the parameter space.
+    """
+    try:
+        from scipy.interpolate import griddata
+    except ImportError:
+        print("Warning: scipy not available, skipping 3D surface plots")
+        print("  Install with: pip install scipy")
+        return
+    
+    # Filter out any NaN values
+    df_clean = df.dropna(subset=['depth', 'e', 'lambda', metric])
+    
+    if len(df_clean) < 10:
+        print(f"Warning: Not enough data points for 3D surface plot ({len(df_clean)} points)")
+        return
+    
+    # Extract data
+    depth_vals = df_clean['depth'].values
+    e_vals = df_clean['e'].values
+    lambda_vals = df_clean['lambda'].values
+    metric_vals = df_clean[metric].values
+    
+    # Create figure with subplots for different views
+    fig = plt.figure(figsize=(18, 12))
+    
+    # View 1: Lambda vs Depth (averaged over e)
+    ax1 = fig.add_subplot(2, 2, 1, projection='3d')
+    
+    # Group by lambda and depth, average over e
+    grouped1 = df_clean.groupby(['lambda', 'depth'])[metric].mean().reset_index()
+    
+    # Create mesh grid
+    lambda_unique = np.sort(grouped1['lambda'].unique())
+    depth_unique = np.sort(grouped1['depth'].unique())
+    
+    if len(lambda_unique) > 1 and len(depth_unique) > 1:
+        lambda_grid, depth_grid = np.meshgrid(lambda_unique, depth_unique)
+        
+        # Interpolate metric values
+        points = grouped1[['lambda', 'depth']].values
+        values = grouped1[metric].values
+        metric_grid = griddata(points, values, (lambda_grid, depth_grid), method='linear')
+        
+        # Plot surface
+        surf1 = ax1.plot_surface(lambda_grid, depth_grid, metric_grid, 
+                                  cmap=cm.viridis, alpha=0.8, edgecolor='none')
+        
+        # Add scatter points
+        ax1.scatter(grouped1['lambda'], grouped1['depth'], grouped1[metric], 
+                   c='red', marker='o', s=20, alpha=0.6)
+        
+        ax1.set_xlabel('Lambda (λ)', fontsize=10, labelpad=10)
+        ax1.set_ylabel('Depth (k)', fontsize=10, labelpad=10)
+        ax1.set_zlabel(metric.upper(), fontsize=10, labelpad=10)
+        ax1.set_title(f'{metric.upper()} vs λ and Depth\n(averaged over e)', fontsize=11)
+        ax1.view_init(elev=20, azim=45)
+        fig.colorbar(surf1, ax=ax1, shrink=0.5, aspect=5)
+    
+    # View 2: Lambda vs E (averaged over depth)
+    ax2 = fig.add_subplot(2, 2, 2, projection='3d')
+    
+    grouped2 = df_clean.groupby(['lambda', 'e'])[metric].mean().reset_index()
+    
+    e_unique = np.sort(grouped2['e'].unique())
+    
+    if len(lambda_unique) > 1 and len(e_unique) > 1:
+        lambda_grid2, e_grid = np.meshgrid(lambda_unique, e_unique)
+        
+        points2 = grouped2[['lambda', 'e']].values
+        values2 = grouped2[metric].values
+        metric_grid2 = griddata(points2, values2, (lambda_grid2, e_grid), method='linear')
+        
+        surf2 = ax2.plot_surface(lambda_grid2, e_grid, metric_grid2,
+                                  cmap=cm.plasma, alpha=0.8, edgecolor='none')
+        
+        ax2.scatter(grouped2['lambda'], grouped2['e'], grouped2[metric],
+                   c='red', marker='o', s=20, alpha=0.6)
+        
+        ax2.set_xlabel('Lambda (λ)', fontsize=10, labelpad=10)
+        ax2.set_ylabel('Expansion Terms (e)', fontsize=10, labelpad=10)
+        ax2.set_zlabel(metric.upper(), fontsize=10, labelpad=10)
+        ax2.set_title(f'{metric.upper()} vs λ and E\n(averaged over depth)', fontsize=11)
+        ax2.view_init(elev=20, azim=45)
+        fig.colorbar(surf2, ax=ax2, shrink=0.5, aspect=5)
+    
+    # View 3: Depth vs E (averaged over lambda)
+    ax3 = fig.add_subplot(2, 2, 3, projection='3d')
+    
+    grouped3 = df_clean.groupby(['depth', 'e'])[metric].mean().reset_index()
+    
+    if len(depth_unique) > 1 and len(e_unique) > 1:
+        depth_grid3, e_grid3 = np.meshgrid(depth_unique, e_unique)
+        
+        points3 = grouped3[['depth', 'e']].values
+        values3 = grouped3[metric].values
+        metric_grid3 = griddata(points3, values3, (depth_grid3, e_grid3), method='linear')
+        
+        surf3 = ax3.plot_surface(depth_grid3, e_grid3, metric_grid3,
+                                  cmap=cm.coolwarm, alpha=0.8, edgecolor='none')
+        
+        ax3.scatter(grouped3['depth'], grouped3['e'], grouped3[metric],
+                   c='red', marker='o', s=20, alpha=0.6)
+        
+        ax3.set_xlabel('Depth (k)', fontsize=10, labelpad=10)
+        ax3.set_ylabel('Expansion Terms (e)', fontsize=10, labelpad=10)
+        ax3.set_zlabel(metric.upper(), fontsize=10, labelpad=10)
+        ax3.set_title(f'{metric.upper()} vs Depth and E\n(averaged over λ)', fontsize=11)
+        ax3.view_init(elev=20, azim=45)
+        fig.colorbar(surf3, ax=ax3, shrink=0.5, aspect=5)
+    
+    # View 4: Best configuration at each (depth, e) pair
+    ax4 = fig.add_subplot(2, 2, 4, projection='3d')
+    
+    # Get best lambda for each (depth, e) combination
+    grouped4 = df_clean.loc[df_clean.groupby(['depth', 'e'])[metric].idxmax()]
+    
+    if len(grouped4) > 3:
+        # Create scatter plot with color representing lambda
+        scatter = ax4.scatter(grouped4['depth'], grouped4['e'], grouped4[metric],
+                             c=grouped4['lambda'], cmap='rainbow', s=100, alpha=0.8,
+                             edgecolor='black', linewidth=1)
+        
+        # Try to create surface if enough points
+        if len(grouped4) >= 10:
+            points4 = grouped4[['depth', 'e']].values
+            values4 = grouped4[metric].values
+            
+            if len(depth_unique) > 1 and len(e_unique) > 1:
+                depth_grid4, e_grid4 = np.meshgrid(depth_unique, e_unique)
+                metric_grid4 = griddata(points4, values4, (depth_grid4, e_grid4), method='linear')
+                
+                ax4.plot_surface(depth_grid4, e_grid4, metric_grid4,
+                               cmap=cm.RdYlGn, alpha=0.3, edgecolor='gray', linewidth=0.2)
+        
+        ax4.set_xlabel('Depth (k)', fontsize=10, labelpad=10)
+        ax4.set_ylabel('Expansion Terms (e)', fontsize=10, labelpad=10)
+        ax4.set_zlabel(metric.upper(), fontsize=10, labelpad=10)
+        ax4.set_title(f'Best {metric.upper()} at each (Depth, E)\n(color = optimal λ)', fontsize=11)
+        ax4.view_init(elev=20, azim=45)
+        cbar = fig.colorbar(scatter, ax=ax4, shrink=0.5, aspect=5)
+        cbar.set_label('Lambda (λ)', fontsize=9)
+    
+    # Overall title
+    main_title = f'3D Parameter Space Analysis: {metric.upper()}'
+    if strategy:
+        main_title += f' (PRF {strategy})'
+    if dataset:
+        main_title += f' - {dataset}'
+    fig.suptitle(main_title, fontsize=16, fontweight='bold', y=0.98)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    
+    filename = f'3d_surface_{metric}_{strategy}.png' if strategy else f'3d_surface_{metric}.png'
+    plt.savefig(PLOTS_DIR / filename, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  ✓ 3D surface plot: {filename}")
 
 def get_strategy_display_name(key):
     """Convert strategy key to display name."""
@@ -276,7 +447,7 @@ def get_strategy_color(key, index):
                          '#E67E22', '#1ABC9C', '#34495E', '#E91E63', '#795548']
         return default_colors[index % len(default_colors)]
 
-def plot_comparison_all_strategies(data, metric='map'):
+def plot_comparison_all_strategies(data, metric='map', dataset=''):
     """Plot comparison of baseline vs best of each strategy."""
     plt.figure(figsize=(14, 8))
     
@@ -349,8 +520,10 @@ def plot_comparison_all_strategies(data, metric='map'):
     
     plt.xlabel('Strategy', fontsize=12, fontweight='bold')
     plt.ylabel(metric.upper(), fontsize=12, fontweight='bold')
-    plt.title(f'Comparison of Best Configurations by Strategy ({metric.upper()})',
-              fontsize=14, fontweight='bold', pad=20)
+    title = f'Comparison of Best Configurations by Strategy ({metric.upper()})'
+    if dataset:
+        title += f' - {dataset}'
+    plt.title(title, fontsize=14, fontweight='bold', pad=20)
     
     plt.xticks(x_pos, strategies, fontsize=8)
     plt.grid(axis='y', alpha=0.3, linestyle='--')
@@ -414,6 +587,17 @@ def main():
     print("GRID SEARCH VISUALIZATION")
     print("="*60 + "\n")
     
+    # Parse command line arguments
+    collection_name = None
+    if len(sys.argv) > 1:
+        collection_name = sys.argv[1]
+        print(f"Using collection: {collection_name}")
+    else:
+        print("No collection specified, using default configuration")
+    
+    # Extract dataset display name
+    dataset_display = collection_name.replace('_index', '').upper() if collection_name else ""
+    
     # Load data
     print("Discovering and loading data...")
     data = load_data()
@@ -427,7 +611,7 @@ def main():
     # Generate comparison plot for all strategies
     print("Generating comparison plots:")
     for metric in metrics:
-        plot_comparison_all_strategies(data, metric)
+        plot_comparison_all_strategies(data, metric, dataset_display)
     print()
     
     # Generate detailed plots for each PRF strategy
@@ -436,10 +620,15 @@ def main():
             strategy_name = key.replace('prf_', '').upper().replace('_', '-')
             print(f"Generating plots for {strategy_name}:")
             for metric in metrics:
-                plot_lambda_impact(df, metric, strategy_name)
-                plot_e_impact(df, metric, strategy_name)
-                plot_depth_impact(df, metric, strategy_name)
-                plot_heatmap(df, metric, strategy_name)
+                plot_lambda_impact(df, metric, strategy_name, dataset_display)
+                plot_e_impact(df, metric, strategy_name, dataset_display)
+                plot_depth_impact(df, metric, strategy_name, dataset_display)
+                plot_heatmap(df, metric, strategy_name, dataset_display)
+            
+            # Generate 3D surface plots
+            print(f"  Generating 3D surface plots for {strategy_name}:")
+            for metric in metrics:
+                plot_3d_surface(df, metric, strategy_name, dataset_display)
             print()
     
     print("="*60)
@@ -452,14 +641,36 @@ def main():
     print("\n✓ Visualization complete!\n")
 
 if __name__ == "__main__":
+    # Check required packages
+    missing_packages = []
+    
     try:
         import pandas
+    except ImportError:
+        missing_packages.append('pandas')
+    
+    try:
         import matplotlib
+    except ImportError:
+        missing_packages.append('matplotlib')
+    
+    try:
         import seaborn
-    except ImportError as e:
-        print(f"Error: Missing required package: {e}")
+    except ImportError:
+        missing_packages.append('seaborn')
+    
+    # scipy is optional for 3D plots
+    try:
+        import scipy
+    except ImportError:
+        print("Note: scipy not installed - 3D surface plots will be skipped")
+        print("  To enable 3D plots, install with: pip install scipy")
+        print()
+    
+    if missing_packages:
+        print(f"Error: Missing required packages: {', '.join(missing_packages)}")
         print("\nPlease install required packages:")
-        print("  pip install pandas matplotlib seaborn")
+        print(f"  pip install {' '.join(missing_packages)}")
         sys.exit(1)
     
     main()
