@@ -7,6 +7,7 @@ REMOTE_USER="root"
 REMOTE_HOST="aule"
 REMOTE_BASE_DIR="/home/javier/prf-llm"
 REMOTE_SCRIPTS_DIR="${REMOTE_BASE_DIR}/scripts"
+REMOTE_PYTHON_DIR="${REMOTE_BASE_DIR}/python"
 
 # Get the project root directory (3 levels up from scripts folder)
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -21,6 +22,13 @@ scp "${SCRIPTS_DIR}/run_grid_search.sh" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_
 scp "${SCRIPTS_DIR}/dataset_config.sh" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_SCRIPTS_DIR}/"
 scp "${SCRIPTS_DIR}/analyze_grid_results.sh" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_SCRIPTS_DIR}/"
 echo "✓ Scripts copied successfully"
+
+# Step 1b: Copy visualize_grid_results.py to remote python directory
+echo "==> Copying visualize_grid_results.py to ${REMOTE_PYTHON_DIR}"
+ssh "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p \"${REMOTE_PYTHON_DIR}\""
+scp "${PROJECT_ROOT}/src/main/python/visualize_grid_results.py" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PYTHON_DIR}/"
+echo "✓ Python visualization script copied successfully"
+echo ""
 echo ""
 
 # Step 2: Build the project with Maven
