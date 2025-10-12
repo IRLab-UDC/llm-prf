@@ -53,8 +53,12 @@ public class VLLMScorer {
             con.setDoOutput(true);
 
             // Create prompt in the format: [document] ... [query] ... Relevant:
-            String prompt = String.format("[document] %s [query] %s. Relevant: ", document, query);
-            
+            String prompt = String.format(
+                "Given the following query and document, determine if the document is relevant (true) to the query or not (false).\n\n" +
+                "Query: %s\n\n" +
+                "Document:\n %s\n",
+                query, document
+            );
             // Create JSON payload using Jackson
             ObjectNode payload = objectMapper.createObjectNode();
             payload.put("prompt", prompt);

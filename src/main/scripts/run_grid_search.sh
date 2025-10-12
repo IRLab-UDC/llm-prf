@@ -100,7 +100,7 @@ else
 fi
 echo ""
 
-read -p "Press Enter to start..."
+# read -p "Press Enter to start..."
 
 # Counter for progress
 COUNTER=0
