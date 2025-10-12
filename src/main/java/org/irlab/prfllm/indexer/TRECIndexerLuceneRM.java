@@ -44,7 +44,7 @@ public class TRECIndexerLuceneRM {
       Directory dir = FSDirectory.open(Paths.get(indexPath));
       Analyzer analyzer = new StandardAnalyzer(EnglishAnalyzer.ENGLISH_STOP_WORDS_SET);
 
-      // Configurar la similitud para usar un modelo de lenguaje (LM)
+      // Configure similarity to use a language model (LM)
       Similarity similarity = new LMDirichletSimilarity();
 
       IndexWriterConfig iwc = new IndexWriterConfig(analyzer);
@@ -54,8 +54,8 @@ public class TRECIndexerLuceneRM {
       IndexWriter writer = new IndexWriter(dir, iwc);
 
       System.out.println("=".repeat(80));
-      System.out.println("Indexando documentos de: " + datasetPath);
-      System.out.println("Índice de salida: " + indexPath);
+      System.out.println("Indexing documents from: " + datasetPath);
+      System.out.println("Output index: " + indexPath);
       System.out.println("=".repeat(80));
       
       long startTime = System.currentTimeMillis();
@@ -67,9 +67,9 @@ public class TRECIndexerLuceneRM {
       long totalTime = (endTime - startTime) / 1000;
       
       System.out.println("=".repeat(80));
-      System.out.println("✓ Indexación completada.");
-      System.out.println("✓ Total de documentos indexados: " + totalDocsIndexed.get());
-      System.out.println("✓ Tiempo total: " + totalTime + " segundos");
+      System.out.println("✓ Indexing completed.");
+      System.out.println("✓ Total documents indexed: " + totalDocsIndexed.get());
+      System.out.println("✓ Total time: " + totalTime + " seconds");
       System.out.println("=".repeat(80));
 
     } catch (IOException e) {
@@ -125,7 +125,7 @@ public class TRECIndexerLuceneRM {
   private static void indexDocMsMarco(IndexWriter writer, File file) throws IOException {
     System.out.println("→ Processing MS MARCO file: " + file.getName());
     
-    Gson gson = new Gson(); // Instancia de Gson para parsear JSON
+    Gson gson = new Gson(); // Gson instance for parsing JSON
     int docsInFile = 0;
     
     try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
@@ -137,46 +137,46 @@ public class TRECIndexerLuceneRM {
       customType.setStoreTermVectorPositions(true);
       customType.setStoreTermVectorOffsets(true);
 
-      // Leer línea por línea
+      // Read line by line
       while ((jsonLine = reader.readLine()) != null) {
         lineNumber++;
         if (jsonLine.trim().isEmpty()) {
-          continue; // Saltar líneas vacías
+          continue; // Skip empty lines
         }
 
         try {
-          // 1. Parsear la línea JSON al objeto auxiliar
+          // 1. Parse the JSON line to the auxiliary object
           JsonDocument jsonDoc = gson.fromJson(jsonLine, JsonDocument.class);
 
-          // 2. Crear el documento de Lucene
+          // 2. Create the Lucene document
           Document doc = new Document();
 
-          // Campo "id": Lo almacenamos y no lo tokenizamos (StringField)
+          // Field "id": Store it and don't tokenize it (StringField)
           doc.add(new StringField("DOCNO", jsonDoc.id, Field.Store.YES));
 
-          // Campo "contents": Lo indexamos y tokenizamos para búsqueda (TextField)
-          // También lo almacenamos para mostrar los resultados, si es necesario.
+          // Field "contents": Index and tokenize for search (TextField)
+          // Also store it to display results, if necessary.
           doc.add(new Field("TEXT", jsonDoc.contents, customType));
 
-          // 3. Añadir el documento al IndexWriter
+          // 3. Add the document to the IndexWriter
           writer.addDocument(doc);
           docsInFile++;
           totalDocsIndexed.incrementAndGet();
 
         } catch (Exception e) {
-          // Capturar excepciones de parseo (JSON malformado) o Lucene.
-          System.err.println("  ✗ Error al procesar la línea "
+          // Catch parsing exceptions (malformed JSON) or Lucene errors.
+          System.err.println("  ✗ Error processing line "
               + lineNumber
-              + " en el archivo "
+              + " in file "
               + file.getName()
               + ": "
               + e.getMessage());
-          // Puedes optar por lanzar la excepción o simplemente continuar con el siguiente
-          // documento.
+          // You can choose to throw the exception or simply continue with the next
+          // document.
         }
       }
       
-      System.out.println("  ✓ Indexados " + docsInFile + " documentos de " + file.getName());
+      System.out.println("  ✓ Indexed " + docsInFile + " documents from " + file.getName());
     }
   }
 
@@ -216,7 +216,7 @@ public class TRECIndexerLuceneRM {
         }
       }
       
-      System.out.println("  ✓ Indexados " + docsInFile + " documentos de " + file.getName());
+      System.out.println("  ✓ Indexed " + docsInFile + " documents from " + file.getName());
     }
   }
 
@@ -255,7 +255,7 @@ public class TRECIndexerLuceneRM {
       doc.add(new Field("CONTENT", cleanText.trim(), customType));
       fullText.append(cleanText.trim());
     }else{
-     // In the case of the web colllections tthere is no explicit TEXT tag, the content is everythinf from the end od the header </DOCHDR> until the end of the doc </DOC>
+     // In the case of web collections there is no explicit TEXT tag, the content is everything from the end of the header </DOCHDR> until the end of the doc </DOC>
       String headerEndTag = "</DOCHDR>"; 
       int headerEndIndex = docString.indexOf(headerEndTag);
       int docEndIndex = docString.indexOf("</DOC>");

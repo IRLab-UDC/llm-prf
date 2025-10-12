@@ -38,21 +38,14 @@ import org.irlab.prfllm.searcher.smoothing.DirichletSmoothing;
 import org.irlab.prfllm.searcher.smoothing.Smoothing;
 import org.irlab.prfllm.searcher.util.StatsProvider;
 import org.irlab.prfllm.searcher.util.TermWeights;
+import org.irlab.prfllm.searcher.util.TRECUtils;
+import org.irlab.prfllm.searcher.util.TRECUtils.Topic;
+import org.irlab.prfllm.searcher.util.scorers.LLMCache;
+import org.irlab.prfllm.searcher.util.scorers.LLMResult;
 import org.irlab.prfllm.searcher.util.scorers.MonoT5Cache;
-import org.irlab.prfllm.searcher.util.scorers.MonoT5Scorer;
-import org.irlab.prfllm.searcher.util.scorers.OllamaCache;
-import org.irlab.prfllm.searcher.util.scorers.OllamaScorer;
 import org.irlab.prfllm.searcher.util.scorers.VLLMCache;
-import org.irlab.prfllm.searcher.util.scorers.VLLMScorer;
 
 public class TRECSearcherLucene {
-
-  // Topic class for TREC topics
-  private static class Topic {
-    String num;
-    String title;
-    String description;
-  }
 
   private static final String SEARCH_FIELD = "TEXT";
 
@@ -114,7 +107,7 @@ public class TRECSearcherLucene {
     String searchBy = null;
 
     String rerankMethod = "none"; // "none", "prf", "monot5"
-    String rfStrategy = "none"; // "none", "PRF", "ORACLE", "OLLAMA"
+    String rfStrategy = "none"; // "none", "PRF", "ORACLE"
     String rfModel = "RM3";
 
     String prfSmoothingModel = "Additive"; // or "Dirichlet"
@@ -130,8 +123,6 @@ public class TRECSearcherLucene {
     String depthsStr = null;
     String eValuesStr = null;
     String lambdasStr = null;
-
-    String ollamaModel = "llama3.1:8b-instruct-fp16"; // Model to use for Ollama
 
     // Parse arguments
     for (int i = 0; i < args.length; i++) {
@@ -193,9 +184,6 @@ public class TRECSearcherLucene {
         case "--lambdas":
           lambdasStr = args[++i];
           break;
-        case "--ollama_model":
-          ollamaModel = args[++i];
-          break;
       }
     }
 
@@ -236,31 +224,22 @@ public class TRECSearcherLucene {
     oracle = loadOracleRelevance(qrelsPath, searcher);
     searcher.setSimilarity(new LMDirichletSimilarity(dirichletMu));
 
-    // Configure Ollama model if using OLLAMA strategy
-    if (rfStrategy.equals("OLLAMA")) {
-      OllamaScorer.setModel(ollamaModel);
-    }
-
     // Parse topics once
     System.out.println("Parsing topics: " + topicsPath);
-    List<Topic> topics = parseTRECTopics(topicsPath);
+    List<Topic> topics = TRECUtils.parseTRECTopics(topicsPath);
 
     // Create main thread's stats provider (others will be created on-demand per thread)
     StatsProvider statsProvider = new StatsProvider(searcher.getIndexReader());
     statsProviderThreadLocal.set(statsProvider); // Set for main thread
 
     // Initialize caches once for all configurations based on strategy
-    MonoT5Cache monoT5Cache = null;
-    OllamaCache ollamaCache = null;
-    VLLMCache vllmCache = null;
+    LLMCache monoT5Cache = null;
+    LLMCache vllmCache = null;
 
     // Initialize cache for PRF strategies
-    if (rfStrategy.equals("MONOT5") || rfStrategy.equals("MONOT5-PROB")) {
+    if (rfStrategy.equals("MONOT5") || rfStrategy.equals("MONOT5-PROB") || rerankMethod.equals("monot5")) {
       System.out.println("Initializing MonoT5 cache...");
       monoT5Cache = new MonoT5Cache(cacheDir);
-    } else if (rfStrategy.equals("OLLAMA")) {
-      System.out.println("Initializing Ollama cache...");
-      ollamaCache = new OllamaCache(cacheDir, ollamaModel);
     } else if (rfStrategy.equals("VLLM") || rfStrategy.equals("VLLM-PROB")) {
       System.out.println("Initializing VLLM cache...");
       vllmCache = new VLLMCache(cacheDir);
@@ -301,35 +280,32 @@ public class TRECSearcherLucene {
 
     if (rerankMethod.equals("none")) {
       // Baseline run
-      String runName = String.format("LMDirichlet-%.0f_%s", dirichletMu, searchBy);
-      runConfiguration(topics, searcher, statsProvider, trecRunFolder + "/" + runName, runName, searchBy, rerankMethod,
-          rfStrategy, rfModel, prfSmoothingModel, prfSmoothingParameter, rerankDepth, e, lambda,
-          ollamaModel, monoT5Cache, ollamaCache, vllmCache);
+      runConfigurationBatch(topics, searcher, statsProvider, trecRunFolder, searchBy, rerankMethod,
+          rfStrategy, rfModel, prfSmoothingModel, prfSmoothingParameter, rerankDepth, e, new double[]{lambda},
+          dirichletMu, monoT5Cache, vllmCache, 0, 1, 0);
     }
 
     if (rerankMethod.equals("monot5")) {
-      String runName = String.format("LMDirichlet-%.0f_%s_rerank-monoT5_topK-%d", dirichletMu, searchBy, rerankDepth);
-      runConfiguration(topics, searcher, statsProvider, trecRunFolder + "/" + runName, runName, searchBy, rerankMethod,
-          rfStrategy, rfModel, prfSmoothingModel, prfSmoothingParameter, rerankDepth, e, lambda,
-          ollamaModel, monoT5Cache, ollamaCache, vllmCache);
+      // MonoT5 reranking
+      runConfigurationBatch(topics, searcher, statsProvider, trecRunFolder, searchBy, rerankMethod,
+          rfStrategy, rfModel, prfSmoothingModel, prfSmoothingParameter, rerankDepth, e, new double[]{lambda},
+          dirichletMu, monoT5Cache, vllmCache, 0, 1, 0);
     }
 
     if (rerankMethod.equals("prf")) {
       for (int depth : depths) {
         for (int eVal : eValues) {
           runConfigurationBatch(topics, searcher, statsProvider, trecRunFolder, searchBy, rerankMethod, rfStrategy,
-              rfModel, prfSmoothingModel, prfSmoothingParameter, depth, eVal, lambdas, ollamaModel,
-              dirichletMu, monoT5Cache, ollamaCache, vllmCache, currentConfig, totalConfigs, skipped);
+              rfModel, prfSmoothingModel, prfSmoothingParameter, depth, eVal, lambdas,
+              dirichletMu, monoT5Cache, vllmCache, currentConfig, totalConfigs, skipped);
 
           // Update counters
           currentConfig += lambdas.length;
 
           // Count how many were actually processed (not skipped)
           for (double lambdaVal : lambdas) {
-            String runName = String.format(
-                "LMDirichlet-%.0f_%s_prf-%s_rfStrategy-%s_rfModel-%s_prfSmoothing-%s-%.4f_topK-%d_lambda-%.2f_e-%d",
-                dirichletMu, searchBy, true, rfStrategy, rfModel, prfSmoothingModel, prfSmoothingParameter, depth,
-                lambdaVal, eVal);
+            String runName = buildRunName(rerankMethod, dirichletMu, searchBy, rfStrategy, rfModel, 
+                prfSmoothingModel, prfSmoothingParameter, depth, lambdaVal, eVal);
             String trecRunPath = trecRunFolder + "/" + runName;
             java.io.File outputFile = new java.io.File(trecRunPath);
             if (outputFile.exists()) {
@@ -343,9 +319,6 @@ public class TRECSearcherLucene {
     // Close caches
     if (monoT5Cache != null) {
       monoT5Cache.close();
-    }
-    if (ollamaCache != null) {
-      ollamaCache.close();
     }
     if (vllmCache != null) {
       vllmCache.close();
@@ -368,6 +341,26 @@ public class TRECSearcherLucene {
     System.out.println("========================================");
   }
 
+  /**
+   * Build the run name based on the rerank method and parameters.
+   */
+  private static String buildRunName(String rerankMethod, float dirichletMu, String searchBy,
+      String rfStrategy, String rfModel, String prfSmoothingModel,
+      double prfSmoothingParameter, int depth, double lambda, int e) {
+    
+    if (rerankMethod.equals("none")) {
+      return String.format("LMDirichlet-%.0f_%s", dirichletMu, searchBy);
+    } else if (rerankMethod.equals("monot5")) {
+      return String.format("LMDirichlet-%.0f_%s_rerank-monoT5_topK-%d", dirichletMu, searchBy, depth);
+    } else if (rerankMethod.equals("prf")) {
+      return String.format(
+          "LMDirichlet-%.0f_%s_prf-%s_rfStrategy-%s_rfModel-%s_prfSmoothing-%s-%.4f_topK-%d_lambda-%.2f_e-%d",
+          dirichletMu, searchBy, true, rfStrategy, rfModel, prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
+    } else {
+      throw new IllegalArgumentException("Unknown rerank method: " + rerankMethod);
+    }
+  }
+
   // New method to run a batch of configurations for all lambda values with same
   // (depth, e)
   // This optimizes by computing the expanded query once and then varying only
@@ -376,17 +369,16 @@ public class TRECSearcherLucene {
       String trecRunFolder, String searchBy, String rerankMethod,
       String rfStrategy, String rfModel, String prfSmoothingModel,
       double prfSmoothingParameter, int depth, int e, double[] lambdas,
-      String ollamaModel, float dirichletMu, MonoT5Cache monoT5Cache,
-      OllamaCache ollamaCache, VLLMCache vllmCache, int startConfig,
+      float dirichletMu, LLMCache monoT5Cache,
+      LLMCache vllmCache, int startConfig,
       int totalConfigs, int currentSkipped) throws Exception {
 
     // First, check which lambda values actually need processing (BEFORE computing
     // RM3!)
     List<Double> neededLambdas = new ArrayList<>();
     for (double lambda : lambdas) {
-      String runName = String.format(
-          "LMDirichlet-%.0f_%s_prf-%s_rfStrategy-%s_rfModel-%s_prfSmoothing-%s-%.4f_topK-%d_lambda-%.2f_e-%d",
-          dirichletMu, searchBy, true, rfStrategy, rfModel, prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
+      String runName = buildRunName(rerankMethod, dirichletMu, searchBy, rfStrategy, rfModel, 
+          prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
 
       String trecRunPath = trecRunFolder + "/" + runName;
       java.io.File outputFile = new java.io.File(trecRunPath);
@@ -408,16 +400,15 @@ public class TRECSearcherLucene {
       return; // Early exit - don't compute anything
     }
     System.out.println(String.format("Will process configurations from %d to %d: ", startConfig + 1,
-        startConfig + neededLambdas.size() - currentSkipped));
+        startConfig + neededLambdas.size()));
     // Report which lambdas need processing
     System.out.println(String.format("  Need to process %d/%d lambda values for depth=%d, e=%d", neededLambdas.size(),
         lambdas.length, depth, e));
 
     // Initialize output files (create empty files for all needed lambdas to avoid append issues)
     for (double lambda : neededLambdas) {
-      String runName = String.format(
-          "LMDirichlet-%.0f_%s_prf-%s_rfStrategy-%s_rfModel-%s_prfSmoothing-%s-%.4f_topK-%d_lambda-%.2f_e-%d",
-          dirichletMu, searchBy, true, rfStrategy, rfModel, prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
+      String runName = buildRunName(rerankMethod, dirichletMu, searchBy, rfStrategy, rfModel, 
+          prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
       String trecRunPath = trecRunFolder + "/" + runName;
       
       // Create empty file (overwrite if exists from incomplete run)
@@ -435,20 +426,20 @@ public class TRECSearcherLucene {
     // When caches are empty for LLM strategies, use sequential to avoid overloading
     boolean useParallel = true;
     final String parallelMode; // Final for use in lambda
-    
-    if (rfStrategy.equals("MONOT5") || rfStrategy.equals("MONOT5-PROB")) {
-      if (monoT5Cache != null && monoT5Cache.isEmpty()) {
+
+    if (rerankMethod.equals("monot5") || (rfStrategy.equals("MONOT5") || rfStrategy.equals("MONOT5-PROB"))) {
+      if ((monoT5Cache != null && monoT5Cache.isEmpty()) || trecRunFolder.contains("test")) {
         useParallel = false;
-        parallelMode = "sequential (MonoT5 cache empty)";
-        System.out.println("⚠ MonoT5 cache is empty - using SEQUENTIAL processing to avoid overload");
+        parallelMode = "sequential (MonoT5 cache empty or test run)";
+        System.out.println("⚠ MonoT5 cache is empty or test run - using SEQUENTIAL processing to avoid overload");
       } else {
         parallelMode = "parallel";
       }
     } else if (rfStrategy.equals("VLLM") || rfStrategy.equals("VLLM-PROB")) {
-      if (vllmCache != null && vllmCache.isEmpty()) {
+      if ((vllmCache != null && vllmCache.isEmpty()) || trecRunFolder.contains("test")) {
         useParallel = false;
-        parallelMode = "sequential (VLLM cache empty)";
-        System.out.println("⚠ VLLM cache is empty - using SEQUENTIAL processing to avoid overload");
+        parallelMode = "sequential (VLLM cache empty or test run)";
+        System.out.println("⚠ VLLM cache is empty or test run - using SEQUENTIAL processing to avoid overload");
       } else {
         parallelMode = "parallel";
       }
@@ -473,62 +464,103 @@ public class TRECSearcherLucene {
         // Get initial results
         TopDocs results = searcher.search(query, 1000);
 
-        // Compute expanded query weights ONCE for this topic and (depth, e) combination
-        // Using thread-local StatsProvider to avoid contention
-        TermWeights expandedQueryWeights = queryExpansion(queryStr, Integer.parseInt(topic.num), results, rfModel,
-            rfStrategy, searcher, threadStatsProvider, prfSmoothingModel,
-            prfSmoothingParameter, depth, e, ollamaModel, monoT5Cache,
-            ollamaCache, vllmCache);
-
-        // Get original query weights
-        List<String> processedTerms = new ArrayList<>();
-        try (TokenStream tokenStream = analyzer.tokenStream(SEARCH_FIELD, queryStr)) {
-          tokenStream.reset();
-          while (tokenStream.incrementToken()) {
-            processedTerms.add(tokenStream.getAttribute(CharTermAttribute.class).toString());
-          }
-          tokenStream.end();
-        }
-        TermWeights originalQueryWeights = TermWeights.fromTerms(processedTerms).scaleToL1Norm();
-
-        // For each lambda value that needs processing, interpolate and search
-        for (double lambda : neededLambdas) {
-          // Interpolate original query with expanded query
-          String runName = String.format(
-              "LMDirichlet-%.0f_%s_prf-%s_rfStrategy-%s_rfModel-%s_prfSmoothing-%s-%.4f_topK-%d_lambda-%.2f_e-%d",
-              dirichletMu, searchBy, true, rfStrategy, rfModel, prfSmoothingModel, prfSmoothingParameter, depth, lambda,
-              e);
-
-          // Interpolate: lambda controls weight of ORIGINAL query
-          // lambda=1.0 → 100% original (no PRF)
-          // lambda=0.0 → 100% expanded (full PRF)
-          TermWeights finalQuery = TermWeights.interpolate(originalQueryWeights, expandedQueryWeights, lambda);
-
-          // Build query string with weights
-          // Escape individual terms, then add boost weights
-          StringBuilder queryBuilder = new StringBuilder();
-          finalQuery.forEach((term, weight) -> {
-            String escapedTerm = QueryParser.escape(term);
-            queryBuilder.append(escapedTerm).append("^").append(String.format("%.10f ", weight));
-          });
-          
-          // Execute search with interpolated query (DON'T escape - already has Lucene syntax!)
-          Query expandedQuery = parser.parse(queryBuilder.toString());
-          TopDocs expandedResults = searcher.search(expandedQuery, 1000);
-
-          // Collect results as strings (to write later in order)
-          if (expandedResults != null) {
+        // Process based on rerank method
+        if (rerankMethod.equals("none")) {
+          // Baseline - just use initial results for all lambdas
+          for (double lambda : neededLambdas) {
+            String runName = buildRunName(rerankMethod, dirichletMu, searchBy, rfStrategy, rfModel, 
+                prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
+            
             StringBuilder resultStr = new StringBuilder();
-            for (int i = 0; i < Math.min(1000, expandedResults.scoreDocs.length); i++) {
-              ScoreDoc scoreDoc = expandedResults.scoreDocs[i];
+            for (int i = 0; i < Math.min(1000, results.scoreDocs.length); i++) {
+              ScoreDoc scoreDoc = results.scoreDocs[i];
               Document doc = searcher.storedFields().document(scoreDoc.doc);
               String docno = doc.get("DOCNO");
-              // Optimization: full runName for rank 1, "--" for the rest to save space
               String tag = (i == 0) ? runName : "--";
               resultStr.append(String.format("%s Q0 %s %d %.6f %s\n", 
                   topic.num, docno, i + 1, scoreDoc.score, tag));
             }
             resultsPerLambda.get(lambda).add(resultStr.toString());
+          }
+          
+        } else if (rerankMethod.equals("monot5")) {
+          // MonoT5 reranking
+          for (double lambda : neededLambdas) {
+            String runName = buildRunName(rerankMethod, dirichletMu, searchBy, rfStrategy, rfModel, 
+                prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
+            
+            // Rerank with MonoT5
+            TopDocs rerankedResults = rerankWithMonoT5(queryStr, Integer.parseInt(topic.num), results, 
+                searcher, depth, monoT5Cache);
+            
+            StringBuilder resultStr = new StringBuilder();
+            for (int i = 0; i < Math.min(1000, rerankedResults.scoreDocs.length); i++) {
+              ScoreDoc scoreDoc = rerankedResults.scoreDocs[i];
+              Document doc = searcher.storedFields().document(scoreDoc.doc);
+              String docno = doc.get("DOCNO");
+              String tag = (i == 0) ? runName : "--";
+              resultStr.append(String.format("%s Q0 %s %d %.6f %s\n", 
+                  topic.num, docno, i + 1, scoreDoc.score, tag));
+            }
+            resultsPerLambda.get(lambda).add(resultStr.toString());
+          }
+          
+        } else if (rerankMethod.equals("prf")) {
+          // PRF with query expansion
+          // Compute expanded query weights ONCE for this topic and (depth, e) combination
+          // Using thread-local StatsProvider to avoid contention
+          TermWeights expandedQueryWeights = queryExpansion(queryStr, Integer.parseInt(topic.num), results, rfModel,
+              rfStrategy, searcher, threadStatsProvider, prfSmoothingModel,
+              prfSmoothingParameter, depth, e, monoT5Cache, vllmCache);
+
+          // Get original query weights
+          List<String> processedTerms = new ArrayList<>();
+          try (TokenStream tokenStream = analyzer.tokenStream(SEARCH_FIELD, queryStr)) {
+            tokenStream.reset();
+            while (tokenStream.incrementToken()) {
+              processedTerms.add(tokenStream.getAttribute(CharTermAttribute.class).toString());
+            }
+            tokenStream.end();
+          }
+          TermWeights originalQueryWeights = TermWeights.fromTerms(processedTerms).scaleToL1Norm();
+
+          // For each lambda value that needs processing, interpolate and search
+          for (double lambda : neededLambdas) {
+            // Interpolate original query with expanded query
+            String runName = buildRunName(rerankMethod, dirichletMu, searchBy, rfStrategy, rfModel, 
+                prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
+
+            // Interpolate: lambda controls weight of ORIGINAL query
+            // lambda=1.0 → 100% original (no PRF)
+            // lambda=0.0 → 100% expanded (full PRF)
+            TermWeights finalQuery = TermWeights.interpolate(originalQueryWeights, expandedQueryWeights, lambda);
+
+            // Build query string with weights
+            // Escape individual terms, then add boost weights
+            StringBuilder queryBuilder = new StringBuilder();
+            finalQuery.forEach((term, weight) -> {
+              String escapedTerm = QueryParser.escape(term);
+              queryBuilder.append(escapedTerm).append("^").append(String.format("%.10f ", weight));
+            });
+            
+            // Execute search with interpolated query (DON'T escape - already has Lucene syntax!)
+            Query expandedQuery = parser.parse(queryBuilder.toString());
+            TopDocs expandedResults = searcher.search(expandedQuery, 1000);
+
+            // Collect results as strings (to write later in order)
+            if (expandedResults != null) {
+              StringBuilder resultStr = new StringBuilder();
+              for (int i = 0; i < Math.min(1000, expandedResults.scoreDocs.length); i++) {
+                ScoreDoc scoreDoc = expandedResults.scoreDocs[i];
+                Document doc = searcher.storedFields().document(scoreDoc.doc);
+                String docno = doc.get("DOCNO");
+                // Optimization: full runName for rank 1, "--" for the rest to save space
+                String tag = (i == 0) ? runName : "--";
+                resultStr.append(String.format("%s Q0 %s %d %.6f %s\n", 
+                    topic.num, docno, i + 1, scoreDoc.score, tag));
+              }
+              resultsPerLambda.get(lambda).add(resultStr.toString());
+            }
           }
         }
         
@@ -553,9 +585,8 @@ public class TRECSearcherLucene {
     // Write all results to files in topic order (sequential, after parallel processing)
     System.out.println("Writing results to files...");
     for (double lambda : neededLambdas) {
-      String runName = String.format(
-          "LMDirichlet-%.0f_%s_prf-%s_rfStrategy-%s_rfModel-%s_prfSmoothing-%s-%.4f_topK-%d_lambda-%.2f_e-%d",
-          dirichletMu, searchBy, true, rfStrategy, rfModel, prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
+      String runName = buildRunName(rerankMethod, dirichletMu, searchBy, rfStrategy, rfModel, 
+          prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
       String trecRunPath = trecRunFolder + "/" + runName;
       
       try (BufferedWriter runWriter = new BufferedWriter(new FileWriter(trecRunPath, false))) {
@@ -568,102 +599,9 @@ public class TRECSearcherLucene {
 
   }
 
-  // Original method kept for single configuration runs (backward compatibility)
-  private static void runConfiguration(List<Topic> topics, IndexSearcher searcher, StatsProvider statsProvider,
-      String trecRunPath, String runName, String searchBy, String rerankMethod,
-      String rfStrategy, String rfModel, String prfSmoothingModel,
-      double prfSmoothingParameter, int rerankDepth, int e, double lambda,
-      String ollamaModel, MonoT5Cache monoT5Cache, OllamaCache ollamaCache,
-      VLLMCache vllmCache) throws Exception {
-
-    BufferedWriter runWriter = new BufferedWriter(new FileWriter(trecRunPath));
-
-    for (Topic topic : topics) {
-      String queryStr = searchBy.equals("title_plus_description") ? topic.title + " " + topic.description : topic.title;
-
-      QueryParser parser = new QueryParser(SEARCH_FIELD, analyzer);
-      Query query = parser.parse(QueryParser.escape(queryStr));
-
-      TopDocs results = searcher.search(query, 1000);
-
-      if (rerankMethod.equals("monot5")) {
-        // Direct reranking with MonoT5 (no query expansion)
-        TopDocs rerankedResults = rerankWithMonoT5(queryStr, Integer.parseInt(topic.num), results, searcher,
-            rerankDepth, monoT5Cache);
-        writeTrecRun(runWriter, topic.num, rerankedResults, searcher, runName);
-      } else if (rerankMethod.equals("prf")) {
-        // PRF with query expansion
-        TermWeights expandedQueryWeights = queryExpansion(queryStr, Integer.parseInt(topic.num), results, rfModel,
-            rfStrategy, searcher, statsProvider, prfSmoothingModel,
-            prfSmoothingParameter, rerankDepth, e, ollamaModel,
-            monoT5Cache, ollamaCache, vllmCache);
-
-        // Second round with expanded query
-        // Escape individual terms, then add boost weights
-        StringBuilder expandedQueryBuilder = new StringBuilder();
-        expandedQueryWeights.forEach((term, weight) -> {
-          String escapedTerm = QueryParser.escape(term);
-          expandedQueryBuilder.append(escapedTerm).append("^").append(String.format("%.10f ", weight));
-        });
-        System.out.println("Expanded query for topic " + topic.num + ": " + expandedQueryBuilder.toString());
-        // Parse query with boost syntax (DON'T escape - already has Lucene syntax!)
-        Query expandedQuery = parser.parse(expandedQueryBuilder.toString());
-        TopDocs expandedResults = searcher.search(expandedQuery, 1000);
-
-        writeTrecRun(runWriter, topic.num, expandedResults, searcher, runName);
-      } else {
-        // No PRF, just write original results
-        writeTrecRun(runWriter, topic.num, results, searcher, runName);
-      }
-    }
-
-    runWriter.close();
-  }
-
-  // Parse TREC topics file (simple version)
-  private static List<Topic> parseTRECTopics(String topicsPath) throws IOException {
-    List<Topic> topics = new ArrayList<>();
-    BufferedReader br = new BufferedReader(new FileReader(topicsPath));
-    String line;
-    Topic topic = null;
-    while ((line = br.readLine()) != null) {
-      if (line.trim().startsWith("<num>")) {
-        topic = new Topic();
-        topic.num = line.replaceAll("[^0-9]", "");
-      } else if (line.trim().startsWith("<title>")) {
-        // We also remove the Topic: prefix if present
-        if (topic != null)
-          topic.title = line.replace("<title>", "").replace("Topic:", "").trim();
-
-      } else if (line.trim().startsWith("<desc>")) {
-        if (topic != null)
-          topic.description = br.readLine().replace("Description:", "").trim();
-      } else if (line.trim().startsWith("</top>")) {
-        if (topic != null)
-          topics.add(topic);
-      }
-    }
-    br.close();
-    return topics;
-  }
-
-  // Write TREC run file
-  private static void writeTrecRun(BufferedWriter writer, String qid, TopDocs results, IndexSearcher searcher,
-      String runTag) throws IOException {
-    int rank = 1;
-    for (ScoreDoc sd : results.scoreDocs) {
-      Document doc = searcher.storedFields().document(sd.doc);
-      String docno = doc.get("DOCNO");
-      // Write full runTag for rank 1, use "--" for the rest to save space
-      String tag = (rank == 1) ? runTag : "--";
-      writer.write(String.format("%s Q0 %s %d %f %s\n", qid, docno, rank, sd.score, tag));
-      rank++;
-    }
-  }
-
   // Rerank top results using MonoT5
   private static TopDocs rerankWithMonoT5(String queryText, int queryId, TopDocs initialResults, IndexSearcher searcher,
-      int depth, MonoT5Cache cache) throws IOException {
+      int depth, LLMCache cache) throws IOException {
 
     List<ScoredDoc> scoredDocs = new ArrayList<>();
     int docsToRerank = Math.min(depth, initialResults.scoreDocs.length);
@@ -675,7 +613,7 @@ public class TRECSearcherLucene {
       String docText = doc.get("TEXT");
 
       // Get result from cache or evaluate
-      MonoT5Scorer.MonoT5Result result = cache.get(queryId, sd.doc, queryText, docText);
+      LLMResult result = cache.get(queryId, sd.doc, queryText, docText);
 
       // Use the score (prob_true) for reranking
       scoredDocs.add(new ScoredDoc(sd.doc, result.score));
@@ -712,9 +650,8 @@ public class TRECSearcherLucene {
 
   private static Map<Integer, Double> filterRelevantDocuments(int queryid, String queryText, TopDocs results, 
       String rfStrategy, int k, IndexSearcher searcher,
-      String ollamaModel, MonoT5Cache monoT5Cache,
-      OllamaCache ollamaCache,
-      VLLMCache vllmCache) throws IOException {
+      LLMCache monoT5Cache,
+      LLMCache vllmCache) throws IOException {
     switch (rfStrategy) {
       case "PRF":
         // we took the top k documents as relevant returning a map with docid and score:
@@ -726,134 +663,101 @@ public class TRECSearcherLucene {
 
         return relevantDocs;
       case "ORACLE":
-        Map<Integer, Double> oracleDocs = new HashMap<>();
-        for (ScoreDoc sd : results.scoreDocs) {
-          if (oracle.containsKey(queryid)) {
-            if (oracle.get(queryid).contains(sd.doc)) {
-              oracleDocs.put(sd.doc, (double) sd.score);
-            }
-          }
-        }
-        return oracleDocs;
+        // Oracle without limit - collect all oracle-relevant documents
+        return filterWithOracle(queryid, results, Integer.MAX_VALUE);
       case "ORACLE-K":
-        Map<Integer, Double> oracleKDocs = new HashMap<>();
-        int count = 0;
-        for (ScoreDoc sd : results.scoreDocs) {
-          if (oracle.containsKey(queryid)) {
-            if (oracle.get(queryid).contains(sd.doc)) {
-              oracleKDocs.put(sd.doc, (double) sd.score);
-              count++;
-              if (count >= k) {
-                break; // Stop after collecting k relevant documents
-              }
-            }
-          }
-        }
-        return oracleKDocs;
+        // Oracle with limit - collect up to k oracle-relevant documents
+        return filterWithOracle(queryid, results, k);
       case "MONOT5":
-        // Use MonoT5 model as a binary filter: iterate through documents in rank order
-        // and collect the first k documents that MonoT5 classifies as relevant.
-        Map<Integer, Double> monoT5Docs = new HashMap<>();
-
-        for (int i = 0; i < Math.min(k, results.scoreDocs.length); i++) {
-          ScoreDoc sd = results.scoreDocs[i];
-          Document doc = searcher.storedFields().document(sd.doc);
-          String docText = doc.get("TEXT");
-
-          // Get result from unified cache
-          MonoT5Scorer.MonoT5Result result = monoT5Cache.get(queryid, sd.doc, queryText, docText);
-
-          if (result.isRelevant) {
-            // Use the original retrieval score for weighting in RM3
-            monoT5Docs.put(sd.doc, (double) sd.score);
-          }
-        }
-
-        return monoT5Docs;
+        return filterWithLLM(queryid, queryText, results, k, searcher, monoT5Cache, 
+            (sd, result) -> (double) sd.score); // Use retrieval score
       case "MONOT5-PROB":
-        // Use MonoT5 model as a binary filter: iterate through documents in rank order
-        // and collect the first k documents that MonoT5 classifies as relevant.
-        Map<Integer, Double> monoT5ProbDocs = new HashMap<>();
-
-        for (int i = 0; i < Math.min(k, results.scoreDocs.length); i++) {
-          ScoreDoc sd = results.scoreDocs[i];
-          Document doc = searcher.storedFields().document(sd.doc);
-          String docText = doc.get("TEXT");
-
-          // Get result from unified cache
-          MonoT5Scorer.MonoT5Result result = monoT5Cache.get(queryid, sd.doc, queryText, docText);
-
-          if (result.isRelevant) {
-            // Use the original retrieval score for weighting in RM3
-            monoT5ProbDocs.put(sd.doc, result.probTrue);
-          }
-        }
-
-        return monoT5ProbDocs;
-      case "OLLAMA":
-        // Use Ollama LLM as a binary filter: iterate through documents in rank order
-        // and collect the first k documents that Ollama classifies as relevant.
-        Map<Integer, Double> ollamaDocs = new HashMap<>();
-
-        for (int i = 0; i < Math.min(k, results.scoreDocs.length); i++) {
-          ScoreDoc sd = results.scoreDocs[i];
-          Document doc = searcher.storedFields().document(sd.doc);
-          String docText = doc.get("TEXT");
-
-          // Get result from Ollama cache
-          OllamaScorer.OllamaResult result = ollamaCache.get(queryid, sd.doc, queryText, docText);
-
-          if (result.isRelevant) {
-            // Use the original retrieval score for weighting in RM3
-            ollamaDocs.put(sd.doc, (double) sd.score);
-          }
-        }
-
-        return ollamaDocs;
+        return filterWithLLM(queryid, queryText, results, k, searcher, monoT5Cache, 
+            (sd, result) -> result.probTrue); // Use LLM probability
       case "VLLM":
-        // Use VLLM as a binary filter: iterate through documents in rank order
-        // and collect the first k documents that VLLM classifies as relevant.
-        Map<Integer, Double> vllmDocs = new HashMap<>();
-
-        for (int i = 0; i < Math.min(k, results.scoreDocs.length); i++) {
-          ScoreDoc sd = results.scoreDocs[i];
-          Document doc = searcher.storedFields().document(sd.doc);
-          String docText = doc.get("TEXT");
-
-          // Get result from VLLM cache
-          VLLMScorer.VLLMResult result = vllmCache.get(queryid, sd.doc, queryText, docText);
-
-          if (result.isRelevant) {
-            // Use the original retrieval score for weighting in RM3
-            vllmDocs.put(sd.doc, (double) sd.score);
-          }
-        }
-
-        return vllmDocs;
+        return filterWithLLM(queryid, queryText, results, k, searcher, vllmCache, 
+            (sd, result) -> (double) sd.score); // Use retrieval score
       case "VLLM-PROB":
-        // Use VLLM with probability scores: iterate through documents in rank order
-        // and collect the first k documents that VLLM classifies as relevant,
-        // using probTrue as the document weight.
-        Map<Integer, Double> vllmProbDocs = new HashMap<>();
-
-        for (int i = 0; i < Math.min(k, results.scoreDocs.length); i++) {
-          ScoreDoc sd = results.scoreDocs[i];
-          Document doc = searcher.storedFields().document(sd.doc);
-          String docText = doc.get("TEXT");
-
-          // Get result from VLLM cache
-          VLLMScorer.VLLMResult result = vllmCache.get(queryid, sd.doc, queryText, docText);
-
-          if (result.isRelevant) {
-            // Use the probability of true as weight
-            vllmProbDocs.put(sd.doc, result.probTrue);
-          }
-        }
-
-        return vllmProbDocs;
+        return filterWithLLM(queryid, queryText, results, k, searcher, vllmCache, 
+            (sd, result) -> result.probTrue); // Use LLM probability
       default:
         throw new IllegalArgumentException("Unknown RF strategy: " + rfStrategy);
     }
+  }
+
+  /**
+   * Functional interface for determining the score to use for a document.
+   */
+  @FunctionalInterface
+  private interface ScoreFunction {
+    double getScore(ScoreDoc sd, LLMResult result);
+  }
+
+  /**
+   * Filter documents using an LLM cache with a custom scoring function.
+   * This method centralizes the logic for MONOT5, MONOT5-PROB, VLLM, and VLLM-PROB.
+   * 
+   * @param queryid Query ID
+   * @param queryText Query text
+   * @param results Initial search results
+   * @param k Maximum number of documents to filter
+   * @param searcher IndexSearcher to retrieve document text
+   * @param llmCache Cache for LLM results
+   * @param scoreFunction Function to determine the score (retrieval score or LLM probability)
+   * @return Map of document IDs to scores for relevant documents
+   * @throws IOException If document retrieval fails
+   */
+  private static Map<Integer, Double> filterWithLLM(int queryid, String queryText, TopDocs results, 
+      int k, IndexSearcher searcher, LLMCache llmCache, ScoreFunction scoreFunction) throws IOException {
+    Map<Integer, Double> filteredDocs = new HashMap<>();
+
+    for (int i = 0; i < Math.min(k, results.scoreDocs.length); i++) {
+      ScoreDoc sd = results.scoreDocs[i];
+      Document doc = searcher.storedFields().document(sd.doc);
+      String docText = doc.get("TEXT");
+
+      // Get result from LLM cache
+      LLMResult result = llmCache.get(queryid, sd.doc, queryText, docText);
+
+      if (result.isRelevant) {
+        // Use the score determined by the scoreFunction
+        filteredDocs.put(sd.doc, scoreFunction.getScore(sd, result));
+      }
+    }
+
+    return filteredDocs;
+  }
+
+  /**
+   * Filter documents using oracle relevance judgments.
+   * This method centralizes the logic for ORACLE and ORACLE-K.
+   * 
+   * @param queryid Query ID to look up in oracle judgments
+   * @param results Initial search results
+   * @param maxDocs Maximum number of oracle-relevant documents to collect (use Integer.MAX_VALUE for no limit)
+   * @return Map of document IDs to scores for oracle-relevant documents
+   */
+  private static Map<Integer, Double> filterWithOracle(int queryid, TopDocs results, int maxDocs) {
+    Map<Integer, Double> oracleDocs = new HashMap<>();
+    
+    if (!oracle.containsKey(queryid)) {
+      return oracleDocs; // No oracle judgments for this query
+    }
+    
+    Set<Integer> relevantDocIds = oracle.get(queryid);
+    int count = 0;
+    
+    for (ScoreDoc sd : results.scoreDocs) {
+      if (relevantDocIds.contains(sd.doc)) {
+        oracleDocs.put(sd.doc, (double) sd.score);
+        count++;
+        if (count >= maxDocs) {
+          break; // Stop after collecting maxDocs relevant documents
+        }
+      }
+    }
+    
+    return oracleDocs;
   }
 
   private static RelevanceFeedback getRelevanceFeedbackModel(String modelName, String field, Smoothing smoothing) {
@@ -874,11 +778,10 @@ public class TRECSearcherLucene {
   private static TermWeights queryExpansion(String originalQuery, int queryId, TopDocs results, String rfModel,
       String rfStrategy, IndexSearcher searcher, StatsProvider statsProvider,
       String prfSmoothingModel, double prfSmoothingParameter, int k, int e,
-      String ollamaModel, MonoT5Cache monoT5Cache, OllamaCache ollamaCache,
-      VLLMCache vllmCache) throws IOException {
+      LLMCache monoT5Cache, LLMCache vllmCache) throws IOException {
 
     Map<Integer, Double> prfDocs = filterRelevantDocuments(queryId, originalQuery, results, rfStrategy, k, searcher,
-        ollamaModel, monoT5Cache, ollamaCache, vllmCache);
+        monoT5Cache, vllmCache);
     Smoothing smoothing = geSmoothing(prfSmoothingModel, prfSmoothingParameter, SEARCH_FIELD, statsProvider);
     RelevanceFeedback feedbackModel = getRelevanceFeedbackModel(rfModel, prfSmoothingModel, smoothing);
     return feedbackModel.getTermWeights(prfDocs).pruneToSize(e).scaleToL1Norm();

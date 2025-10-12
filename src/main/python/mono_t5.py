@@ -5,7 +5,7 @@ import torch
 
 app = Flask(__name__)
 
-# Cargar modelo y tokenizer una sola vez
+# Load model and tokenizer once
 model_name = "castorini/monot5-base-msmarco"
 tokenizer = T5Tokenizer.from_pretrained(model_name)
 model = T5ForConditionalGeneration.from_pretrained(model_name)
@@ -15,12 +15,13 @@ def eval():
     data = request.json
     query = data["query"]
     doc = data["document"]
-
-    # Formato de entrada para MonoT5
+    # Replace all line breaks with spaces in the document text
+    doc = doc.replace("\n", " ").replace("\r", " ")
+    # Input format for MonoT5
     prompt = f"Query: {query} Document: {doc} Relevant:"
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
 
-    # Generar salida con scores
+    # Generate output with scores
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -29,24 +30,24 @@ def eval():
             output_scores=True
         )
 
-    # Secuencia decodificada ("true" o "false")
+    # Decoded sequence ("true" or "false")
     decoded = tokenizer.decode(outputs.sequences[0], skip_special_tokens=True)
 
-    # Obtener logits del primer token generado
-    logits = outputs.scores[0][0]  # scores para el primer token generado
+    # Get logits from the first generated token
+    logits = outputs.scores[0][0]  # scores for the first generated token
     true_id = tokenizer.encode("true", add_special_tokens=False)[0]
     false_id = tokenizer.encode("false", add_special_tokens=False)[0]
     
-    # Calcular probabilidades
+    # Calculate probabilities
     probs = torch.softmax(logits, dim=-1)
     prob_true = probs[true_id].item()
     prob_false = probs[false_id].item()
     
-    # Logits individuales
+    # Individual logits
     logit_true = logits[true_id].item()
     logit_false = logits[false_id].item()
     
-    # Score (probabilidad de "true")
+    # Score (probability of "true")
     score = prob_true
 
     result = {

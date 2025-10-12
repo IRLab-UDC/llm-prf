@@ -8,11 +8,11 @@ import java.util.Map;
  * Cache manager for MonoT5 scorer results.
  * Manages persistent cache with all MonoT5 metrics.
  */
-public class MonoT5Cache {
+public class MonoT5Cache implements LLMCache {
     private final String cacheDir;
     private final String cacheFile;
     
-    private Map<String, MonoT5Scorer.MonoT5Result> cache;
+    private Map<String, LLMResult> cache;
     private BufferedWriter cacheWriter;
 
     public MonoT5Cache(String cacheDirectory) throws IOException {
@@ -33,13 +33,9 @@ public class MonoT5Cache {
                         String cacheKey = parts[0] + "_" + parts[1];
                         String prediction = parts[2];
                         boolean isRelevant = "true".equalsIgnoreCase(prediction);
-                        double logitTrue = Double.parseDouble(parts[3]);
-                        double logitFalse = Double.parseDouble(parts[4]);
                         double probTrue = Double.parseDouble(parts[5]);
-                        double probFalse = Double.parseDouble(parts[6]);
                         double score = Double.parseDouble(parts[7]);
-                        cache.put(cacheKey, new MonoT5Scorer.MonoT5Result(
-                            isRelevant, logitTrue, logitFalse, probTrue, probFalse, score, prediction));
+                        cache.put(cacheKey, new LLMResult(isRelevant, probTrue, score));
                     }
                 }
             }
@@ -49,7 +45,8 @@ public class MonoT5Cache {
         this.cacheWriter = new BufferedWriter(new FileWriter(cacheFile, true));
     }
 
-    public MonoT5Scorer.MonoT5Result get(int queryId, int docId, String queryText, String docText) throws IOException {
+    @Override
+    public LLMResult get(int queryId, int docId, String queryText, String docText) throws IOException {
         String cacheKey = queryId + "_" + docId;
 
         if (cache.containsKey(cacheKey)) {
@@ -57,15 +54,16 @@ public class MonoT5Cache {
         }
 
         // Not in cache, evaluate with MonoT5
-        MonoT5Scorer.MonoT5Result result = MonoT5Scorer.evaluate(queryText, docText);
+        MonoT5Scorer.MonoT5Result monoResult = MonoT5Scorer.evaluate(queryText, docText);
 
         // Write to cache file: query_id \t doc_id \t prediction \t logit_true \t logit_false \t prob_true \t prob_false \t score
         cacheWriter.write(String.format("%d\t%d\t%s\t%.16f\t%.16f\t%.16f\t%.16f\t%.16f\n",
-                queryId, docId, result.prediction, result.logitTrue, result.logitFalse, 
-                result.probTrue, result.probFalse, result.score));
+                queryId, docId, monoResult.prediction, monoResult.logitTrue, monoResult.logitFalse, 
+                monoResult.probTrue, monoResult.probFalse, monoResult.score));
         cacheWriter.flush();
 
-        // Store in memory cache
+        // Convert to LLMResult and store in memory cache
+        LLMResult result = new LLMResult(monoResult.isRelevant, monoResult.probTrue, monoResult.score);
         cache.put(cacheKey, result);
 
         return result;
@@ -81,10 +79,12 @@ public class MonoT5Cache {
     /**
      * Returns true if the cache is empty (no entries loaded).
      */
+    @Override
     public boolean isEmpty() {
         return cache.isEmpty();
     }
 
+    @Override
     public void close() throws IOException {
         if (cacheWriter != null) {
             cacheWriter.close();

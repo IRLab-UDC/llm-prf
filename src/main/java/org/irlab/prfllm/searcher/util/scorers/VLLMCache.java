@@ -8,11 +8,11 @@ import java.util.Map;
  * Cache manager for VLLM scorer results.
  * Manages persistent cache with probability scores.
  */
-public class VLLMCache {
+public class VLLMCache implements LLMCache {
     private final String cacheDir;
     private final String cacheFile;
     
-    private Map<String, VLLMScorer.VLLMResult> cache;
+    private Map<String, LLMResult> cache;
     private BufferedWriter cacheWriter;
 
     public VLLMCache(String cacheDirectory) throws IOException {
@@ -33,8 +33,8 @@ public class VLLMCache {
                         String cacheKey = parts[0] + "_" + parts[1];
                         boolean isRelevant = Boolean.parseBoolean(parts[2]);
                         double probTrue = Double.parseDouble(parts[3]);
-                        double probFalse = Double.parseDouble(parts[4]);
-                        cache.put(cacheKey, new VLLMScorer.VLLMResult(isRelevant, probTrue, probFalse));
+                        // For LLMResult, score is probTrue
+                        cache.put(cacheKey, new LLMResult(isRelevant, probTrue, probTrue));
                     }
                 }
             }
@@ -45,7 +45,8 @@ public class VLLMCache {
         this.cacheWriter = new BufferedWriter(new FileWriter(cacheFile, true));
     }
 
-    public VLLMScorer.VLLMResult get(int queryId, int docId, String queryText, String docText) throws IOException {
+    @Override
+    public LLMResult get(int queryId, int docId, String queryText, String docText) throws IOException {
         String cacheKey = queryId + "_" + docId;
 
         if (cache.containsKey(cacheKey)) {
@@ -53,14 +54,15 @@ public class VLLMCache {
         }
 
         // Not in cache, evaluate with VLLM
-        VLLMScorer.VLLMResult result = VLLMScorer.evaluate(queryText, docText);
+        VLLMScorer.VLLMResult vllmResult = VLLMScorer.evaluate(queryText, docText);
 
         // Write to cache file: query_id \t doc_id \t is_relevant \t prob_true \t prob_false
         cacheWriter.write(String.format("%d\t%d\t%s\t%.16f\t%.16f\n",
-                queryId, docId, result.isRelevant, result.probTrue, result.probFalse));
+                queryId, docId, vllmResult.isRelevant, vllmResult.probTrue, vllmResult.probFalse));
         cacheWriter.flush();
 
-        // Store in memory cache
+        // Convert to LLMResult and store in memory cache
+        LLMResult result = new LLMResult(vllmResult.isRelevant, vllmResult.probTrue, vllmResult.probTrue);
         cache.put(cacheKey, result);
 
         return result;
@@ -76,10 +78,12 @@ public class VLLMCache {
     /**
      * Returns true if the cache is empty (no entries loaded).
      */
+    @Override
     public boolean isEmpty() {
         return cache.isEmpty();
     }
 
+    @Override
     public void close() throws IOException {
         if (cacheWriter != null) {
             cacheWriter.close();
