@@ -13,11 +13,12 @@ public interface LLMCache {
      * @param queryId Query identifier
      * @param docId Document identifier
      * @param queryText Query text
+     * @param narrative Narrative or instructions for the query (can be null)
      * @param docText Document text
      * @return LLMResult containing relevance judgment and probabilities
      * @throws IOException if there's an error accessing the cache or LLM
      */
-    LLMResult get(int queryId, int docId, String queryText, String docText) throws IOException;
+    LLMResult get(int queryId, int docId, String queryText, String narrative, String docText) throws IOException;
     
     /**
      * Check if the cache is empty (no entries).

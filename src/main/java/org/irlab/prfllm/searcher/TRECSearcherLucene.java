@@ -244,7 +244,7 @@ public class TRECSearcherLucene {
       monoT5Cache = new MonoT5Cache(cacheDir);
     } else if (rfStrategy.equals("VLLM") || rfStrategy.equals("VLLM-PROB")) {
       System.out.println("Initializing VLLM cache...");
-      vllmCache = new VLLMCache(cacheDir);
+      vllmCache = new VLLMCache(cacheDir, searchBy);
     }
 
     // Also initialize MonoT5 cache if using monot5 reranking
@@ -504,7 +504,7 @@ public class TRECSearcherLucene {
                 prfSmoothingModel, prfSmoothingParameter, depth, lambda, e);
 
             // Rerank with MonoT5
-            TopDocs rerankedResults = rerankWithMonoT5(queryStr, Integer.parseInt(topic.num), results,
+            TopDocs rerankedResults = rerankWithMonoT5(queryStr, searchBy.equals("title_plus_narrative") ? topic.narrative : null, Integer.parseInt(topic.num), results,
                 searcher, depth, monoT5Cache);
 
             StringBuilder resultStr = new StringBuilder();
@@ -523,7 +523,7 @@ public class TRECSearcherLucene {
           // PRF with query expansion
           // Compute expanded query weights ONCE for this topic and (depth, e) combination
           // Using thread-local StatsProvider to avoid contention
-          TermWeights expandedQueryWeights = queryExpansion(queryStr, Integer.parseInt(topic.num), results, rfModel,
+          TermWeights expandedQueryWeights = queryExpansion(queryStr, searchBy.equals("title_plus_narrative") ? topic.narrative : null, Integer.parseInt(topic.num), results, rfModel,
               rfStrategy, searcher, threadStatsProvider, prfSmoothingModel,
               prfSmoothingParameter, depth, e, monoT5Cache, vllmCache);
 
@@ -617,7 +617,7 @@ public class TRECSearcherLucene {
   }
 
   // Rerank top results using MonoT5
-  private static TopDocs rerankWithMonoT5(String queryText, int queryId, TopDocs initialResults, IndexSearcher searcher,
+  private static TopDocs rerankWithMonoT5(String queryText, String narrative, int queryId, TopDocs initialResults, IndexSearcher searcher,
       int depth, LLMCache cache) throws IOException {
 
     List<ScoredDoc> scoredDocs = new ArrayList<>();
@@ -630,7 +630,7 @@ public class TRECSearcherLucene {
       String docText = doc.get("TEXT");
 
       // Get result from cache or evaluate
-      LLMResult result = cache.get(queryId, sd.doc, queryText, docText);
+      LLMResult result = cache.get(queryId, sd.doc, queryText, narrative, docText);
 
       // Use the score (prob_true) for reranking
       scoredDocs.add(new ScoredDoc(sd.doc, result.score));
@@ -665,7 +665,7 @@ public class TRECSearcherLucene {
     }
   }
 
-  private static Map<Integer, Double> filterRelevantDocuments(int queryid, String queryText, TopDocs results,
+  private static Map<Integer, Double> filterRelevantDocuments(int queryid, String queryText, String narrative, TopDocs results,
       String rfStrategy, int k, IndexSearcher searcher,
       LLMCache monoT5Cache,
       LLMCache vllmCache) throws IOException {
@@ -686,16 +686,16 @@ public class TRECSearcherLucene {
         // Oracle with limit - collect up to k oracle-relevant documents
         return filterWithOracle(queryid, results, k);
       case "MONOT5":
-        return filterWithLLM(queryid, queryText, results, k, searcher, monoT5Cache,
+        return filterWithLLM(queryid, queryText, narrative, results, k, searcher, monoT5Cache,
             (sd, result) -> (double) sd.score); // Use retrieval score
       case "MONOT5-PROB":
-        return filterWithLLM(queryid, queryText, results, k, searcher, monoT5Cache,
+        return filterWithLLM(queryid, queryText, narrative, results, k, searcher, monoT5Cache,
             (sd, result) -> result.probTrue); // Use LLM probability
       case "VLLM":
-        return filterWithLLM(queryid, queryText, results, k, searcher, vllmCache,
+        return filterWithLLM(queryid, queryText, narrative, results, k, searcher, vllmCache,
             (sd, result) -> (double) sd.score); // Use retrieval score
       case "VLLM-PROB":
-        return filterWithLLM(queryid, queryText, results, k, searcher, vllmCache,
+        return filterWithLLM(queryid, queryText, narrative, results, k, searcher, vllmCache,
             (sd, result) -> result.probTrue); // Use LLM probability
       default:
         throw new IllegalArgumentException("Unknown RF strategy: " + rfStrategy);
@@ -726,7 +726,7 @@ public class TRECSearcherLucene {
    * @return Map of document IDs to scores for relevant documents
    * @throws IOException If document retrieval fails
    */
-  private static Map<Integer, Double> filterWithLLM(int queryid, String queryText, TopDocs results,
+  private static Map<Integer, Double> filterWithLLM(int queryid, String queryText, String narrative,TopDocs results,
       int k, IndexSearcher searcher, LLMCache llmCache, ScoreFunction scoreFunction) throws IOException {
     Map<Integer, Double> filteredDocs = new HashMap<>();
 
@@ -736,7 +736,7 @@ public class TRECSearcherLucene {
       String docText = doc.get("TEXT");
 
       // Get result from LLM cache
-      LLMResult result = llmCache.get(queryid, sd.doc, queryText, docText);
+      LLMResult result = llmCache.get(queryid, sd.doc, queryText, narrative, docText);
 
       if (result.isRelevant) {
         // Use the score determined by the scoreFunction
@@ -795,12 +795,11 @@ public class TRECSearcherLucene {
     };
   }
 
-  private static TermWeights queryExpansion(String originalQuery, int queryId, TopDocs results, String rfModel,
+  private static TermWeights queryExpansion(String originalQuery, String narrative, int queryId, TopDocs results, String rfModel,
       String rfStrategy, IndexSearcher searcher, StatsProvider statsProvider,
       String prfSmoothingModel, double prfSmoothingParameter, int k, int e,
       LLMCache monoT5Cache, LLMCache vllmCache) throws IOException {
-
-    Map<Integer, Double> prfDocs = filterRelevantDocuments(queryId, originalQuery, results, rfStrategy, k, searcher,
+    Map<Integer, Double> prfDocs = filterRelevantDocuments(queryId, originalQuery, narrative, results, rfStrategy, k, searcher,
         monoT5Cache, vllmCache);
     Smoothing smoothing = geSmoothing(prfSmoothingModel, prfSmoothingParameter, SEARCH_FIELD, statsProvider);
     RelevanceFeedback feedbackModel = getRelevanceFeedbackModel(rfModel, prfSmoothingModel, smoothing);

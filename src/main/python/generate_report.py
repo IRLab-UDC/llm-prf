@@ -76,29 +76,94 @@ def calculate_robustness_index(results_dir, run_name, baseline_name):
     
     return (ri, num_improved, num_hurt, total_queries)
 
-def get_file_paths(results_dir):
-    """Get all file paths for a given results directory."""
-    return {
-        'summary_baseline': results_dir / "summary_baseline.tsv",
-        'summary_rerank': results_dir / "summary_monot5_rerank.tsv",
-        'summary_prf_prf': results_dir / "summary_prf_prf.tsv",
-        'summary_prf_monot5': results_dir / "summary_prf_monot5.tsv",
-        'summary_prf_monot5_prob': results_dir / "summary_prf_monot5_prob.tsv",
-        'summary_prf_ollama': results_dir / "summary_prf_ollama.tsv",
-        'summary_prf_vllm': results_dir / "summary_prf_vllm.tsv",
-        'summary_prf_vllm_prob': results_dir / "summary_prf_vllm_prob.tsv",
-        'summary_prf_oracle': results_dir / "summary_prf_oracle.tsv",
-        'summary_prf_oracle_k': results_dir / "summary_prf_oracle_k.tsv",
-        'report_file': results_dir / "GRID_SEARCH_REPORT.md"
-    }
+def discover_summary_files(results_dir):
+    """Discover all summary*.tsv files and extract strategy names and query types."""
+    summary_files = {}
+    
+    # Find all summary*.tsv files
+    for file_path in results_dir.glob("summary*.tsv"):
+        filename = file_path.name
+        
+        # Extract strategy and query type from filename
+        # Patterns:
+        # - summary_baseline_QUERYTYPE.tsv
+        # - summary_monot5_rerank_QUERYTYPE.tsv
+        # - summary_prf_STRATEGY_QUERYTYPE.tsv
+        
+        if filename.startswith("summary_baseline_"):
+            # Extract query type from summary_baseline_QUERYTYPE.tsv
+            query_type = filename.replace("summary_baseline_", "").replace(".tsv", "")
+            key = f'baseline_{query_type}'
+            summary_files[key] = file_path
+            
+        elif filename.startswith("summary_monot5_rerank_"):
+            # Extract query type from summary_monot5_rerank_QUERYTYPE.tsv
+            query_type = filename.replace("summary_monot5_rerank_", "").replace(".tsv", "")
+            key = f'rerank_{query_type}'
+            summary_files[key] = file_path
+            
+        elif filename.startswith("summary_prf_"):
+            # Extract strategy and query type from summary_prf_STRATEGY_QUERYTYPE.tsv
+            rest = filename.replace("summary_prf_", "").replace(".tsv", "")
+            
+            # Split by known query types (from right to left)
+            query_types = ["title-only", "title-plus-narrative", "title-plus-description"]
+            strategy = None
+            query_type = None
+            
+            for qt in query_types:
+                if rest.endswith(f"_{qt}"):
+                    query_type = qt
+                    strategy = rest[:-len(f"_{qt}")]
+                    break
+            
+            if strategy and query_type:
+                key = f'prf_{strategy}_{query_type}'
+                summary_files[key] = file_path
+        
+        # Also handle legacy files without query type
+        elif filename == "summary_baseline.tsv":
+            summary_files['baseline'] = file_path
+        elif filename == "summary_monot5_rerank.tsv":
+            summary_files['rerank'] = file_path
+        elif filename.startswith("summary_prf_") and '_title-' not in filename:
+            strategy = filename.replace("summary_prf_", "").replace(".tsv", "")
+            summary_files[f'prf_{strategy}'] = file_path
+    
+    return summary_files
 
-def load_data(file_paths):
-    """Load all summary files."""
+def get_file_paths(results_dir):
+    """Get all file paths for a given results directory (DEPRECATED - use discover_summary_files)."""
+    # Keep for backward compatibility but mark as deprecated
+    summary_files = discover_summary_files(results_dir)
+    
+    # Add report file path
+    summary_files['report_file'] = results_dir / "GRID_SEARCH_REPORT.md"
+    
+    return summary_files
+
+def load_data(results_dir):
+    """Load all summary files automatically."""
     data = {}
     
-    # Load baseline if exists
-    if file_paths['summary_baseline'].exists():
-        data['baseline'] = pd.read_csv(file_paths['summary_baseline'], sep='\t')
+    # Discover available summary files
+    summary_files = discover_summary_files(results_dir)
+    
+    if not summary_files:
+        print("Warning: No summary files found in", results_dir)
+        return data
+    
+    # Load each discovered file
+    for key, filepath in summary_files.items():
+        try:
+            df = pd.read_csv(filepath, sep='\t')
+            if len(df) > 0:
+                data[key] = df
+                print(f"✓ Loaded {len(df)} {key} configurations from {filepath.name}")
+        except Exception as e:
+            print(f"Warning: Could not load {filepath}: {e}")
+    
+    return data
     
     # Load reranker if exists
     if file_paths['summary_rerank'].exists():
@@ -159,7 +224,14 @@ def generate_parameter_ranges(data):
             strategy_name = key.replace('prf_', '').upper().replace('_', '-')
             
             # Convert numpy types to native Python types for clean display
-            depths = [int(x) for x in sorted(df['depth'].unique())]
+            # Handle 'all' for ORACLE depth
+            depths = []
+            for x in sorted(df['depth'].unique()):
+                if isinstance(x, str) and x == 'all':
+                    depths.append('all')
+                else:
+                    depths.append(int(x))
+            
             e_values = [int(x) for x in sorted(df['e'].unique())]
             lambdas = [float(x) for x in sorted(df['lambda'].unique())]
             
@@ -230,7 +302,14 @@ def generate_best_configurations(data, results_dir):
             if key in data and len(data[key]) > 0:
                 best = data[key].loc[data[key][metric].idxmax()]
                 lines.append(f"**Best {name}:**")
-                lines.append(f"- Depth (k): {best['depth']:.0f}")
+                
+                # Handle depth - could be 'all' for ORACLE
+                depth_val = best['depth']
+                if isinstance(depth_val, str) and depth_val == 'all':
+                    lines.append(f"- Depth (k): all")
+                else:
+                    lines.append(f"- Depth (k): {depth_val:.0f}")
+                
                 lines.append(f"- Expansion terms (e): {best['e']:.0f}")
                 lines.append(f"- Lambda (λ): {best['lambda']:.2f}")
                 lines.append(f"- **{metric.upper()}**: {best[metric]:.4f}")
@@ -280,7 +359,14 @@ def generate_top_configs(data, strategy_key, strategy_name, metric='map', n=10):
     
     topN = df.nlargest(n, metric)
     for idx, (i, row) in enumerate(topN.iterrows(), 1):
-        lines.append(f"| {idx} | {row['depth']:.0f} | {row['e']:.0f} | "
+        # Handle depth - could be 'all' for ORACLE
+        depth_val = row['depth']
+        if isinstance(depth_val, str) and depth_val == 'all':
+            depth_str = 'all'
+        else:
+            depth_str = f"{depth_val:.0f}"
+        
+        lines.append(f"| {idx} | {depth_str} | {row['e']:.0f} | "
                      f"{row['lambda']:.2f} | {row['map']:.4f} | "
                      f"{row['P@10']:.4f} | {row['ndcg@100']:.4f} |")
     lines.append("")
@@ -324,9 +410,29 @@ def generate_parameter_analysis(df, strategy_name):
     depth_stats = df.groupby('depth')[['map', 'P@10', 'ndcg@100']].agg(['mean', 'std', 'max'])
     lines.append("| Depth | MAP (mean±std) | MAP (max) | P@10 (mean±std) | P@10 (max) |")
     lines.append("|-------|----------------|-----------|-----------------|------------|")
-    for depth_val in sorted(df['depth'].unique()):
+    
+    # Sort depths, handling 'all' specially
+    depth_values = df['depth'].unique()
+    sorted_depths = []
+    has_all = False
+    for d in depth_values:
+        if isinstance(d, str) and d == 'all':
+            has_all = True
+        else:
+            sorted_depths.append(d)
+    sorted_depths = sorted(sorted_depths)
+    if has_all:
+        sorted_depths.append('all')
+    
+    for depth_val in sorted_depths:
         stats = depth_stats.loc[depth_val]
-        lines.append(f"| {depth_val:.0f} | "
+        # Format depth value
+        if isinstance(depth_val, str) and depth_val == 'all':
+            depth_str = 'all'
+        else:
+            depth_str = f"{depth_val:.0f}"
+        
+        lines.append(f"| {depth_str} | "
                      f"{stats[('map', 'mean')]:.4f}±{stats[('map', 'std')]:.4f} | "
                      f"{stats[('map', 'max')]:.4f} | "
                      f"{stats[('P@10', 'mean')]:.4f}±{stats[('P@10', 'std')]:.4f} | "
@@ -341,9 +447,49 @@ def generate_parameter_analysis(df, strategy_name):
     lines.append("**Key Insights:**")
     lines.append(f"- Best average lambda: {best_lambda:.1f}")
     lines.append(f"- Best average e: {best_e:.0f}")
-    lines.append(f"- Best average depth: {best_depth:.0f}\n")
+    
+    # Handle depth - could be 'all' for ORACLE
+    if isinstance(best_depth, str) and best_depth == 'all':
+        lines.append(f"- Best average depth: all\n")
+    else:
+        lines.append(f"- Best average depth: {best_depth:.0f}\n")
     
     return lines
+
+def get_strategy_display_name(key):
+    """Convert strategy key to display name, including query type."""
+    # Parse key format: baseline_QUERYTYPE, rerank_QUERYTYPE, or prf_STRATEGY_QUERYTYPE
+    
+    # Extract query type (last part with hyphens converted to spaces)
+    query_type_candidates = ['title-only', 'title-plus-narrative', 'title-plus-description']
+    query_type = None
+    base_key = key
+    
+    # Check if key ends with a known query type
+    for qt in query_type_candidates:
+        if key.endswith(f'_{qt}'):
+            query_type = qt.replace('-', ' ').title()
+            # Remove query type from base_key
+            base_key = key[:-len(f'_{qt}')]
+            break
+    
+    # Handle different base types
+    if base_key == 'baseline':
+        name = 'Baseline (LM Dirichlet)'
+    elif base_key == 'rerank':
+        name = 'MonoT5 Rerank'
+    elif base_key.startswith('prf_'):
+        strategy = base_key.replace('prf_', '').upper().replace('_', '-')
+        name = f'PRF + {strategy}'
+    else:
+        # Fallback for unknown formats
+        name = key.upper().replace('_', ' ')
+    
+    # Add query type if detected
+    if query_type:
+        name += f' ({query_type})'
+    
+    return name
 
 def generate_report(data, results_dir, collection_name=None):
     """Generate complete report."""
@@ -368,67 +514,135 @@ def generate_report(data, results_dir, collection_name=None):
     # Top-10 configurations for each PRF strategy
     report.append("## Top Configurations by Strategy\n")
     
-    prf_strategies = [
-        ('prf_prf', 'PRF (blind)'),
-        ('prf_monot5', 'PRF + MonoT5'),
-        ('prf_monot5_prob', 'PRF + MonoT5-PROB'),
-        ('prf_ollama', 'PRF + OLLAMA'),
-        ('prf_vllm', 'PRF + VLLM'),
-        ('prf_vllm_prob', 'PRF + VLLM-PROB'),
-        ('prf_oracle_k', 'PRF + ORACLE-K'),
-        ('prf_oracle', 'PRF + ORACLE')
-    ]
+    # Get all PRF strategies dynamically (excluding baseline and rerank)
+    prf_keys = sorted([k for k in data.keys() if k.startswith('prf_')])
     
-    for key, name in prf_strategies:
-        if key in data:
+    for key in prf_keys:
+        if key in data and len(data[key]) > 0:
+            name = get_strategy_display_name(key)
             report.extend(generate_top_configs(data, key, name))
     
     # Parameter analysis for each strategy
     report.append("## Detailed Parameter Analysis\n")
     
-    for key, name in prf_strategies:
-        if key in data:
+    for key in prf_keys:
+        if key in data and len(data[key]) > 0:
+            name = get_strategy_display_name(key)
             report.extend(generate_parameter_analysis(data[key], name))
     
     # Overall comparison
     report.append("## Overall Strategy Comparison\n")
     
-    if 'baseline' in data and len(data['baseline']) > 0:
-        baseline_map = data['baseline']['map'].iloc[0]
-        baseline_name = data['baseline'].iloc[0]['run_name']
+    # Find baseline with the correct query type for each comparison
+    # Group strategies by query type for fair comparison
+    query_types = set()
+    for key in data.keys():
+        for qt in ['title-only', 'title-plus-narrative', 'title-plus-description']:
+            if f'_{qt}' in key:
+                query_types.add(qt)
+    
+    # Also check for legacy keys without query type
+    has_legacy = any(k in data for k in ['baseline', 'rerank']) or \
+                 any(k.startswith('prf_') and not any(f'_{qt}' in k for qt in query_types) 
+                     for k in data.keys())
+    
+    # Generate comparison tables for each query type
+    for qt in sorted(query_types):
+        qt_display = qt.replace('-', ' ').title()
+        report.append(f"### Performance Summary - {qt_display} (MAP)\n")
         
-        report.append("### Performance Summary (MAP)\n")
-        report.append("| Strategy | Best MAP | Avg MAP | Improvement | RI (Best) |")
-        report.append("|----------|----------|---------|-------------|-----------|")
-        report.append(f"| Baseline | {baseline_map:.4f} | {baseline_map:.4f} | - | - |")
-        
-        if 'rerank' in data and len(data['rerank']) > 0:
-            best_idx = data['rerank']['map'].idxmax()
-            best = data['rerank']['map'].max()
-            avg = data['rerank']['map'].mean()
-            improvement = ((best - baseline_map) / baseline_map) * 100
+        baseline_key = f'baseline_{qt}'
+        if baseline_key in data and len(data[baseline_key]) > 0:
+            baseline_map = data[baseline_key]['map'].iloc[0]
+            baseline_name = data[baseline_key].iloc[0]['run_name']
             
-            # Calculate RI for best config
-            best_run_name = data['rerank'].loc[best_idx, 'run_name']
-            ri_result = calculate_robustness_index(results_dir, best_run_name, baseline_name)
-            ri_str = f"{ri_result[0]:.3f}" if ri_result else "N/A"
+            report.append("| Strategy | Best MAP | Avg MAP | Improvement | RI (Best) |")
+            report.append("|----------|----------|---------|-------------|-----------|")
+            report.append(f"| Baseline | {baseline_map:.4f} | {baseline_map:.4f} | - | - |")
             
-            report.append(f"| MonoT5 Rerank | {best:.4f} | {avg:.4f} | {improvement:+.2f}% | {ri_str} |")
-        
-        for key, name in prf_strategies:
-            if key in data and len(data[key]) > 0:
-                best_idx = data[key]['map'].idxmax()
-                best = data[key]['map'].max()
-                avg = data[key]['map'].mean()
+            # MonoT5 Rerank for this query type
+            rerank_key = f'rerank_{qt}'
+            if rerank_key in data and len(data[rerank_key]) > 0:
+                best_idx = data[rerank_key]['map'].idxmax()
+                best = data[rerank_key]['map'].max()
+                avg = data[rerank_key]['map'].mean()
                 improvement = ((best - baseline_map) / baseline_map) * 100
                 
                 # Calculate RI for best config
-                best_run_name = data[key].loc[best_idx, 'run_name']
+                best_run_name = data[rerank_key].loc[best_idx, 'run_name']
                 ri_result = calculate_robustness_index(results_dir, best_run_name, baseline_name)
                 ri_str = f"{ri_result[0]:.3f}" if ri_result else "N/A"
                 
+                name = get_strategy_display_name(rerank_key)
                 report.append(f"| {name} | {best:.4f} | {avg:.4f} | {improvement:+.2f}% | {ri_str} |")
-        report.append("")
+            
+            # PRF strategies for this query type
+            prf_keys = sorted([k for k in data.keys() 
+                              if k.startswith('prf_') and k.endswith(f'_{qt}')])
+            
+            for key in prf_keys:
+                if len(data[key]) > 0:
+                    best_idx = data[key]['map'].idxmax()
+                    best = data[key]['map'].max()
+                    avg = data[key]['map'].mean()
+                    improvement = ((best - baseline_map) / baseline_map) * 100
+                    
+                    # Calculate RI for best config
+                    best_run_name = data[key].loc[best_idx, 'run_name']
+                    ri_result = calculate_robustness_index(results_dir, best_run_name, baseline_name)
+                    ri_str = f"{ri_result[0]:.3f}" if ri_result else "N/A"
+                    
+                    name = get_strategy_display_name(key)
+                    report.append(f"| {name} | {best:.4f} | {avg:.4f} | {improvement:+.2f}% | {ri_str} |")
+            
+            report.append("")
+    
+    # Also handle legacy data without query type (backward compatibility)
+    if has_legacy:
+        report.append("### Performance Summary - Legacy (No Query Type) (MAP)\n")
+        
+        if 'baseline' in data and len(data['baseline']) > 0:
+            baseline_map = data['baseline']['map'].iloc[0]
+            baseline_name = data['baseline'].iloc[0]['run_name']
+            
+            report.append("| Strategy | Best MAP | Avg MAP | Improvement | RI (Best) |")
+            report.append("|----------|----------|---------|-------------|-----------|")
+            report.append(f"| Baseline | {baseline_map:.4f} | {baseline_map:.4f} | - | - |")
+            
+            if 'rerank' in data and len(data['rerank']) > 0:
+                best_idx = data['rerank']['map'].idxmax()
+                best = data['rerank']['map'].max()
+                avg = data['rerank']['map'].mean()
+                improvement = ((best - baseline_map) / baseline_map) * 100
+                
+                # Calculate RI for best config
+                best_run_name = data['rerank'].loc[best_idx, 'run_name']
+                ri_result = calculate_robustness_index(results_dir, best_run_name, baseline_name)
+                ri_str = f"{ri_result[0]:.3f}" if ri_result else "N/A"
+                
+                report.append(f"| MonoT5 Rerank | {best:.4f} | {avg:.4f} | {improvement:+.2f}% | {ri_str} |")
+            
+            # Legacy PRF strategies
+            legacy_prf_keys = sorted([k for k in data.keys() 
+                                     if k.startswith('prf_') and 
+                                     not any(f'_{qt}' in k for qt in query_types)])
+            
+            for key in legacy_prf_keys:
+                if len(data[key]) > 0:
+                    best_idx = data[key]['map'].idxmax()
+                    best = data[key]['map'].max()
+                    avg = data[key]['map'].mean()
+                    improvement = ((best - baseline_map) / baseline_map) * 100
+                    
+                    # Calculate RI for best config
+                    best_run_name = data[key].loc[best_idx, 'run_name']
+                    ri_result = calculate_robustness_index(results_dir, best_run_name, baseline_name)
+                    ri_str = f"{ri_result[0]:.3f}" if ri_result else "N/A"
+                    
+                    name = get_strategy_display_name(key)
+                    report.append(f"| {name} | {best:.4f} | {avg:.4f} | {improvement:+.2f}% | {ri_str} |")
+            
+            report.append("")
     
     # Visualizations with embedded images
     report.append("## Visualizations\n")
@@ -548,14 +762,14 @@ def main():
         collection_name = "ap8889_index"  # Default
         print(f"No collection specified, using default: {collection_name}")
     
-    # Get file paths
+    # Get results directory
     results_dir = get_results_dir(collection_name)
-    file_paths = get_file_paths(results_dir)
     
     print(f"Looking for results in: {results_dir}")
-    print("Generating Markdown report...")
+    print("Discovering and loading data...")
     
-    data = load_data(file_paths)
+    # Load data directly from results_dir
+    data = load_data(results_dir)
     
     if len(data) == 0:
         print("Error: No summary files found")
@@ -563,14 +777,16 @@ def main():
         print(f"Expected files in: {results_dir}")
         return
     
+    print("Generating Markdown report...")
     report = generate_report(data, results_dir, collection_name)
     
-    with open(file_paths['report_file'], 'w') as f:
+    report_file = results_dir / "GRID_SEARCH_REPORT.md"
+    with open(report_file, 'w') as f:
         f.write(report)
     
-    print(f"✓ Report saved to: {file_paths['report_file']}")
+    print(f"✓ Report saved to: {report_file}")
     print(f"\nView with:")
-    print(f"  cat {file_paths['report_file']}")
+    print(f"  cat {report_file}")
     print(f"  or open in VS Code for formatted Markdown view")
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ public class MonoT5Cache implements LLMCache {
     }
 
     @Override
-    public LLMResult get(int queryId, int docId, String queryText, String docText) throws IOException {
+    public LLMResult get(int queryId, int docId, String queryText, String narrative, String docText) throws IOException {
         String cacheKey = queryId + "_" + docId;
 
         if (cache.containsKey(cacheKey)) {

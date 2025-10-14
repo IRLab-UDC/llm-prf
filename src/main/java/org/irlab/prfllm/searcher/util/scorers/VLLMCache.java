@@ -15,10 +15,10 @@ public class VLLMCache implements LLMCache {
     private Map<String, LLMResult> cache;
     private BufferedWriter cacheWriter;
 
-    public VLLMCache(String cacheDirectory) throws IOException {
+    public VLLMCache(String cacheDirectory, String queryType) throws IOException {
         this.cacheDir = cacheDirectory;
-        this.cacheFile = cacheDir + "/vllm_cache.tsv";
-        
+        this.cacheFile = cacheDir + "/vllm_cache_" + queryType + ".tsv";
+
         new File(cacheDir).mkdirs();
         this.cache = new HashMap<>();
 
@@ -46,7 +46,7 @@ public class VLLMCache implements LLMCache {
     }
 
     @Override
-    public LLMResult get(int queryId, int docId, String queryText, String docText) throws IOException {
+    public LLMResult get(int queryId, int docId, String queryText, String narrative, String docText) throws IOException {
         String cacheKey = queryId + "_" + docId;
 
         if (cache.containsKey(cacheKey)) {
@@ -54,7 +54,7 @@ public class VLLMCache implements LLMCache {
         }
 
         // Not in cache, evaluate with VLLM
-        VLLMScorer.VLLMResult vllmResult = VLLMScorer.evaluate(queryText, docText);
+        VLLMScorer.VLLMResult vllmResult = VLLMScorer.evaluate(queryText, narrative, docText);
 
         // Write to cache file: query_id \t doc_id \t is_relevant \t prob_true \t prob_false
         cacheWriter.write(String.format("%d\t%d\t%s\t%.16f\t%.16f\n",

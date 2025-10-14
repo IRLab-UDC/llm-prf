@@ -20,9 +20,6 @@ import sys
 import re
 import subprocess
 from pathlib import Path
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import cm
-from scipy.interpolate import griddata
 
 def get_results_dir(collection_name=None):
     """Get results directory based on collection name or from config."""
@@ -87,22 +84,53 @@ sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (12, 8)
 
 def discover_summary_files():
-    """Discover all summary*.tsv files and extract strategy names."""
+    """Discover all summary*.tsv files and extract strategy names and query types."""
     summary_files = {}
     
     # Find all summary*.tsv files
     for file_path in RESULTS_DIR.glob("summary*.tsv"):
         filename = file_path.name
         
-        # Extract strategy from filename
-        if filename == "summary_baseline.tsv":
-            summary_files['baseline'] = file_path
-        elif filename == "summary_monot5_rerank.tsv":
-            summary_files['rerank'] = file_path
+        # Extract strategy and query type from filename
+        # Patterns:
+        # - summary_baseline_QUERYTYPE.tsv
+        # - summary_monot5_rerank_QUERYTYPE.tsv
+        # - summary_prf_STRATEGY_QUERYTYPE.tsv
+        
+        if filename.startswith("summary_baseline_"):
+            # Extract query type from summary_baseline_QUERYTYPE.tsv
+            query_type = filename.replace("summary_baseline_", "").replace(".tsv", "")
+            key = f'baseline_{query_type}'
+            summary_files[key] = file_path
+            
+        elif filename.startswith("summary_monot5_rerank_"):
+            # Extract query type from summary_monot5_rerank_QUERYTYPE.tsv
+            query_type = filename.replace("summary_monot5_rerank_", "").replace(".tsv", "")
+            key = f'rerank_{query_type}'
+            summary_files[key] = file_path
+            
         elif filename.startswith("summary_prf_"):
-            # Extract strategy name from summary_prf_STRATEGY.tsv
-            strategy = filename.replace("summary_prf_", "").replace(".tsv", "")
-            summary_files[f'prf_{strategy}'] = file_path
+            # Extract strategy and query type from summary_prf_STRATEGY_QUERYTYPE.tsv
+            # The pattern is: summary_prf_{strategy}_{query_type}.tsv
+            # where query_type ends the filename and strategy comes before it
+            
+            # Remove prefix and suffix
+            rest = filename.replace("summary_prf_", "").replace(".tsv", "")
+            
+            # Split by known query types (from right to left)
+            query_types = ["title-only", "title-plus-narrative", "title-plus-description"]
+            strategy = None
+            query_type = None
+            
+            for qt in query_types:
+                if rest.endswith(f"_{qt}"):
+                    query_type = qt
+                    strategy = rest[:-len(f"_{qt}")]
+                    break
+            
+            if strategy and query_type:
+                key = f'prf_{strategy}_{query_type}'
+                summary_files[key] = file_path
     
     return summary_files
 
@@ -134,6 +162,22 @@ def load_data():
     
     return data
 
+def format_depth(depth):
+    """Format depth value, handling both numeric and 'all' values."""
+    if isinstance(depth, str) and depth == 'all':
+        return 'all'
+    try:
+        return str(int(depth))
+    except (ValueError, TypeError):
+        return str(depth)
+
+def format_e(e):
+    """Format e value, handling both numeric and special values."""
+    try:
+        return str(int(e))
+    except (ValueError, TypeError):
+        return str(e)
+
 def plot_lambda_impact(df, metric='map', strategy='', dataset=''):
     """Plot impact of lambda on performance."""
     plt.figure(figsize=(14, 8))
@@ -146,7 +190,7 @@ def plot_lambda_impact(df, metric='map', strategy='', dataset=''):
                 subset = subset.sort_values('lambda')
                 plt.plot(subset['lambda'], subset[metric], 
                         marker='o', alpha=0.6, 
-                        label=f'd={int(depth)}, e={int(e)}')
+                        label=f'd={format_depth(depth)}, e={format_e(e)}')
     
     plt.xlabel('Lambda (interpolation weight)', fontsize=12)
     plt.ylabel(metric.upper(), fontsize=12)
@@ -176,7 +220,7 @@ def plot_e_impact(df, metric='map', strategy='', dataset=''):
                 subset = subset.sort_values('e')
                 plt.plot(subset['e'], subset[metric], 
                         marker='o', alpha=0.6,
-                        label=f'd={int(depth)}, λ={lambda_val}')
+                        label=f'd={format_depth(depth)}, λ={lambda_val}')
     
     plt.xlabel('Number of Expansion Terms (e)', fontsize=12)
     plt.ylabel(metric.upper(), fontsize=12)
@@ -249,183 +293,55 @@ def plot_heatmap(df, metric='map', strategy='', dataset=''):
     plt.savefig(PLOTS_DIR / filename, dpi=300, bbox_inches='tight')
     plt.close()
 
-def plot_3d_surface(df, metric='map', strategy='', dataset=''):
-    """
-    Plot 3D surface showing the interaction between depth, e, and lambda.
-    Creates multiple views for better understanding of the parameter space.
-    """
-    try:
-        from scipy.interpolate import griddata
-    except ImportError:
-        print("Warning: scipy not available, skipping 3D surface plots")
-        print("  Install with: pip install scipy")
-        return
-    
-    # Filter out any NaN values
-    df_clean = df.dropna(subset=['depth', 'e', 'lambda', metric])
-    
-    if len(df_clean) < 10:
-        print(f"Warning: Not enough data points for 3D surface plot ({len(df_clean)} points)")
-        return
-    
-    # Extract data
-    depth_vals = df_clean['depth'].values
-    e_vals = df_clean['e'].values
-    lambda_vals = df_clean['lambda'].values
-    metric_vals = df_clean[metric].values
-    
-    # Create figure with subplots for different views
-    fig = plt.figure(figsize=(18, 12))
-    
-    # View 1: Lambda vs Depth (averaged over e)
-    ax1 = fig.add_subplot(2, 2, 1, projection='3d')
-    
-    # Group by lambda and depth, average over e
-    grouped1 = df_clean.groupby(['lambda', 'depth'])[metric].mean().reset_index()
-    
-    # Create mesh grid
-    lambda_unique = np.sort(grouped1['lambda'].unique())
-    depth_unique = np.sort(grouped1['depth'].unique())
-    
-    if len(lambda_unique) > 1 and len(depth_unique) > 1:
-        lambda_grid, depth_grid = np.meshgrid(lambda_unique, depth_unique)
-        
-        # Interpolate metric values
-        points = grouped1[['lambda', 'depth']].values
-        values = grouped1[metric].values
-        metric_grid = griddata(points, values, (lambda_grid, depth_grid), method='linear')
-        
-        # Plot surface
-        surf1 = ax1.plot_surface(lambda_grid, depth_grid, metric_grid, 
-                                  cmap=cm.viridis, alpha=0.8, edgecolor='none')
-        
-        # Add scatter points
-        ax1.scatter(grouped1['lambda'], grouped1['depth'], grouped1[metric], 
-                   c='red', marker='o', s=20, alpha=0.6)
-        
-        ax1.set_xlabel('Lambda (λ)', fontsize=10, labelpad=10)
-        ax1.set_ylabel('Depth (k)', fontsize=10, labelpad=10)
-        ax1.set_zlabel(metric.upper(), fontsize=10, labelpad=10)
-        ax1.set_title(f'{metric.upper()} vs λ and Depth\n(averaged over e)', fontsize=11)
-        ax1.view_init(elev=20, azim=45)
-        fig.colorbar(surf1, ax=ax1, shrink=0.5, aspect=5)
-    
-    # View 2: Lambda vs E (averaged over depth)
-    ax2 = fig.add_subplot(2, 2, 2, projection='3d')
-    
-    grouped2 = df_clean.groupby(['lambda', 'e'])[metric].mean().reset_index()
-    
-    e_unique = np.sort(grouped2['e'].unique())
-    
-    if len(lambda_unique) > 1 and len(e_unique) > 1:
-        lambda_grid2, e_grid = np.meshgrid(lambda_unique, e_unique)
-        
-        points2 = grouped2[['lambda', 'e']].values
-        values2 = grouped2[metric].values
-        metric_grid2 = griddata(points2, values2, (lambda_grid2, e_grid), method='linear')
-        
-        surf2 = ax2.plot_surface(lambda_grid2, e_grid, metric_grid2,
-                                  cmap=cm.plasma, alpha=0.8, edgecolor='none')
-        
-        ax2.scatter(grouped2['lambda'], grouped2['e'], grouped2[metric],
-                   c='red', marker='o', s=20, alpha=0.6)
-        
-        ax2.set_xlabel('Lambda (λ)', fontsize=10, labelpad=10)
-        ax2.set_ylabel('Expansion Terms (e)', fontsize=10, labelpad=10)
-        ax2.set_zlabel(metric.upper(), fontsize=10, labelpad=10)
-        ax2.set_title(f'{metric.upper()} vs λ and E\n(averaged over depth)', fontsize=11)
-        ax2.view_init(elev=20, azim=45)
-        fig.colorbar(surf2, ax=ax2, shrink=0.5, aspect=5)
-    
-    # View 3: Depth vs E (averaged over lambda)
-    ax3 = fig.add_subplot(2, 2, 3, projection='3d')
-    
-    grouped3 = df_clean.groupby(['depth', 'e'])[metric].mean().reset_index()
-    
-    if len(depth_unique) > 1 and len(e_unique) > 1:
-        depth_grid3, e_grid3 = np.meshgrid(depth_unique, e_unique)
-        
-        points3 = grouped3[['depth', 'e']].values
-        values3 = grouped3[metric].values
-        metric_grid3 = griddata(points3, values3, (depth_grid3, e_grid3), method='linear')
-        
-        surf3 = ax3.plot_surface(depth_grid3, e_grid3, metric_grid3,
-                                  cmap=cm.coolwarm, alpha=0.8, edgecolor='none')
-        
-        ax3.scatter(grouped3['depth'], grouped3['e'], grouped3[metric],
-                   c='red', marker='o', s=20, alpha=0.6)
-        
-        ax3.set_xlabel('Depth (k)', fontsize=10, labelpad=10)
-        ax3.set_ylabel('Expansion Terms (e)', fontsize=10, labelpad=10)
-        ax3.set_zlabel(metric.upper(), fontsize=10, labelpad=10)
-        ax3.set_title(f'{metric.upper()} vs Depth and E\n(averaged over λ)', fontsize=11)
-        ax3.view_init(elev=20, azim=45)
-        fig.colorbar(surf3, ax=ax3, shrink=0.5, aspect=5)
-    
-    # View 4: Best configuration at each (depth, e) pair
-    ax4 = fig.add_subplot(2, 2, 4, projection='3d')
-    
-    # Get best lambda for each (depth, e) combination
-    grouped4 = df_clean.loc[df_clean.groupby(['depth', 'e'])[metric].idxmax()]
-    
-    if len(grouped4) > 3:
-        # Create scatter plot with color representing lambda
-        scatter = ax4.scatter(grouped4['depth'], grouped4['e'], grouped4[metric],
-                             c=grouped4['lambda'], cmap='rainbow', s=100, alpha=0.8,
-                             edgecolor='black', linewidth=1)
-        
-        # Try to create surface if enough points
-        if len(grouped4) >= 10:
-            points4 = grouped4[['depth', 'e']].values
-            values4 = grouped4[metric].values
-            
-            if len(depth_unique) > 1 and len(e_unique) > 1:
-                depth_grid4, e_grid4 = np.meshgrid(depth_unique, e_unique)
-                metric_grid4 = griddata(points4, values4, (depth_grid4, e_grid4), method='linear')
-                
-                ax4.plot_surface(depth_grid4, e_grid4, metric_grid4,
-                               cmap=cm.RdYlGn, alpha=0.3, edgecolor='gray', linewidth=0.2)
-        
-        ax4.set_xlabel('Depth (k)', fontsize=10, labelpad=10)
-        ax4.set_ylabel('Expansion Terms (e)', fontsize=10, labelpad=10)
-        ax4.set_zlabel(metric.upper(), fontsize=10, labelpad=10)
-        ax4.set_title(f'Best {metric.upper()} at each (Depth, E)\n(color = optimal λ)', fontsize=11)
-        ax4.view_init(elev=20, azim=45)
-        cbar = fig.colorbar(scatter, ax=ax4, shrink=0.5, aspect=5)
-        cbar.set_label('Lambda (λ)', fontsize=9)
-    
-    # Overall title
-    main_title = f'3D Parameter Space Analysis: {metric.upper()}'
-    if strategy:
-        main_title += f' (PRF {strategy})'
-    if dataset:
-        main_title += f' - {dataset}'
-    fig.suptitle(main_title, fontsize=16, fontweight='bold', y=0.98)
-    
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    
-    filename = f'3d_surface_{metric}_{strategy}.png' if strategy else f'3d_surface_{metric}.png'
-    plt.savefig(PLOTS_DIR / filename, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"  ✓ 3D surface plot: {filename}")
-
 def get_strategy_display_name(key):
-    """Convert strategy key to display name."""
-    if key == 'baseline':
-        return 'Baseline\n(LM Dirichlet)'
-    elif key == 'rerank':
-        return 'MonoT5 Rerank'
-    elif key.startswith('prf_'):
-        strategy = key.replace('prf_', '').upper()
-        # Convert underscores to hyphens for consistency
-        strategy = strategy.replace('_', '-')
-        return f'PRF + {strategy}' if strategy != 'PRF' else 'PRF (blind)'
+    """Convert strategy key to display name, including query type."""
+    # Parse key format: baseline_QUERYTYPE, rerank_QUERYTYPE, or prf_STRATEGY_QUERYTYPE
+    
+    parts = key.split('_')
+    
+    # Extract query type (last part with hyphens converted to spaces)
+    query_type_candidates = ['title-only', 'title-plus-narrative', 'title-plus-description']
+    query_type = None
+    base_key = key
+    
+    # Check if key ends with a known query type
+    for qt in query_type_candidates:
+        if key.endswith(f'_{qt}'):
+            query_type = qt.replace('-', ' ').title()
+            # Remove query type from base_key
+            base_key = key[:-len(f'_{qt}')]
+            break
+    
+    # Handle different base types
+    if base_key == 'baseline':
+        name = 'Baseline (LM Dirichlet)'
+    elif base_key == 'rerank':
+        name = 'MonoT5 Rerank'
+    elif base_key.startswith('prf_'):
+        strategy = base_key.replace('prf_', '').upper().replace('_', '-')
+        name = f'PRF + {strategy}'
     else:
-        return key.upper()
+        # Fallback for unknown formats
+        name = key.upper().replace('_', ' ')
+    
+    # Add query type if detected
+    if query_type:
+        name += f'\n({query_type})'
+    
+    return name
 
 def get_strategy_color(key, index):
-    """Get color for strategy based on key."""
-    # Predefined colors for known strategies
+    """Get color for strategy based on key (extracts base strategy, ignoring query type)."""
+    # Extract base strategy key (without query type suffix)
+    query_type_candidates = ['title-only', 'title-plus-narrative', 'title-plus-description']
+    base_key = key
+    
+    for qt in query_type_candidates:
+        if key.endswith(f'_{qt}'):
+            base_key = key[:-len(f'_{qt}')]
+            break
+    
+    # Predefined colors for known base strategies
     color_map = {
         'baseline': '#808080',
         'rerank': '#FF6B6B',
@@ -439,8 +355,8 @@ def get_strategy_color(key, index):
         'prf_oracle': '#98D8C8'
     }
     
-    if key in color_map:
-        return color_map[key]
+    if base_key in color_map:
+        return color_map[base_key]
     else:
         # Generate colors for unknown strategies
         default_colors = ['#E74C3C', '#3498DB', '#2ECC71', '#F1C40F', '#9B59B6', 
@@ -457,15 +373,44 @@ def plot_comparison_all_strategies(data, metric='map', dataset=''):
     labels = []
     
     # Sort strategies: baseline first, then rerank, then PRF strategies
+    # Also group by query type
     sorted_keys = []
-    if 'baseline' in data:
-        sorted_keys.append('baseline')
-    if 'rerank' in data:
-        sorted_keys.append('rerank')
     
-    # Add PRF strategies sorted alphabetically
-    prf_keys = [k for k in sorted(data.keys()) if k.startswith('prf_')]
-    sorted_keys.extend(prf_keys)
+    # Get all query types present in the data
+    query_types = set()
+    for key in data.keys():
+        for qt in ['title-only', 'title-plus-narrative', 'title-plus-description']:
+            if f'_{qt}' in key:
+                query_types.add(qt)
+    
+    # Sort query types for consistent ordering
+    query_types = sorted(query_types)
+    
+    # For each query type, add baseline, rerank, then PRF strategies
+    for qt in query_types:
+        # Add baseline for this query type
+        baseline_key = f'baseline_{qt}'
+        if baseline_key in data:
+            sorted_keys.append(baseline_key)
+        
+        # Add rerank for this query type
+        rerank_key = f'rerank_{qt}'
+        if rerank_key in data:
+            sorted_keys.append(rerank_key)
+        
+        # Add PRF strategies for this query type, sorted alphabetically
+        prf_keys = [k for k in sorted(data.keys()) 
+                   if k.startswith('prf_') and k.endswith(f'_{qt}')]
+        sorted_keys.extend(prf_keys)
+    
+    # Also handle any keys without query type (legacy support)
+    if 'baseline' in data and 'baseline' not in sorted_keys:
+        sorted_keys.insert(0, 'baseline')
+    if 'rerank' in data and 'rerank' not in sorted_keys:
+        sorted_keys.insert(1, 'rerank')
+    legacy_prf = [k for k in sorted(data.keys()) 
+                  if k.startswith('prf_') and k not in sorted_keys]
+    sorted_keys.extend(legacy_prf)
     
     for i, key in enumerate(sorted_keys):
         df = data[key]
@@ -475,24 +420,30 @@ def plot_comparison_all_strategies(data, metric='map', dataset=''):
         display_name = get_strategy_display_name(key)
         color = get_strategy_color(key, i)
         
-        if key == 'baseline':
+        # Check if this is a baseline (with or without query type)
+        is_baseline = key.startswith('baseline')
+        # Check if this is rerank (with or without query type)
+        is_rerank = key.startswith('rerank')
+        
+        if is_baseline:
             # Baseline has only one value
             val = df[metric].iloc[0]
             strategies.append(display_name)
             values.append(val)
             colors.append(color)
             labels.append(f'{val:.4f}')
-        elif key == 'rerank':
+        elif is_rerank:
             # MonoT5 Reranker - best configuration
             best = df.loc[df[metric].idxmax()]
-            strategies.append(f'{display_name}\n(depth={int(best["depth"])})')
+            strategies.append(f'{display_name}\n(depth={format_depth(best["depth"])})')
             values.append(best[metric])
             colors.append(color)
             labels.append(f'{best[metric]:.4f}')
         else:
             # PRF strategies - best configuration
             best = df.loc[df[metric].idxmax()]
-            strategies.append(f'{display_name}\n(k={int(best["depth"])},\n e={int(best["e"])},\n λ={best["lambda"]:.2f})')
+            
+            strategies.append(f'{display_name}\n(k={format_depth(best["depth"])},\n e={format_e(best["e"])},\n λ={best["lambda"]:.2f})')
             values.append(best[metric])
             colors.append(color)
             labels.append(f'{best[metric]:.4f}')
@@ -507,16 +458,36 @@ def plot_comparison_all_strategies(data, metric='map', dataset=''):
         plt.text(bar.get_x() + bar.get_width()/2., height,
                 label, ha='center', va='bottom', fontsize=10, fontweight='bold')
     
-    # Add percentage improvement over baseline if baseline exists
-    if 'baseline' in data and len(data['baseline']) > 0:
-        baseline_val = data['baseline'][metric].iloc[0]
-        for i, val in enumerate(values):
-            if i == 0 and 'baseline' in sorted_keys and sorted_keys[0] == 'baseline':
-                continue  # Skip baseline itself
-            improvement = ((val - baseline_val) / baseline_val) * 100
-            plt.text(i, val * 0.5, f'{improvement:+.1f}%',
-                    ha='center', va='center', fontsize=9,
-                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+    # Add percentage improvement over corresponding baseline
+    # Each system is compared to the baseline with the same query type
+    for i, (key, val) in enumerate(zip(sorted_keys, values)):
+        # Determine the baseline to compare against
+        baseline_key = None
+        baseline_val = None
+        
+        # Extract query type from current key
+        for qt in ['title-only', 'title-plus-narrative', 'title-plus-description']:
+            if f'_{qt}' in key:
+                baseline_key = f'baseline_{qt}'
+                break
+        
+        # If no query type found, try legacy baseline
+        if baseline_key is None:
+            baseline_key = 'baseline'
+        
+        # Get baseline value if it exists
+        if baseline_key in data and len(data[baseline_key]) > 0:
+            baseline_val = data[baseline_key][metric].iloc[0]
+        
+        # Skip if this IS the baseline or if no baseline found
+        if key == baseline_key or baseline_val is None:
+            continue
+        
+        # Calculate and display improvement
+        improvement = ((val - baseline_val) / baseline_val) * 100
+        plt.text(i, val * 0.5, f'{improvement:+.1f}%',
+                ha='center', va='center', fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
     
     plt.xlabel('Strategy', fontsize=12, fontweight='bold')
     plt.ylabel(metric.upper(), fontsize=12, fontweight='bold')
@@ -542,7 +513,7 @@ def print_summary(data):
     # Count configurations
     total_configs = 0
     for key, df in data.items():
-        if 'prf_' in key or key == 'rerank':
+        if 'prf_' in key or 'rerank' in key:
             total_configs += len(df)
     
     print(f"Total configurations evaluated: {total_configs}")
@@ -552,35 +523,77 @@ def print_summary(data):
         print(f"\n{metric.upper()} Results:")
         print("-" * 60)
         
-        # Sort strategies for consistent output
-        sorted_keys = []
-        if 'baseline' in data:
-            sorted_keys.append('baseline')
-        if 'rerank' in data:
-            sorted_keys.append('rerank')
+        # Get all query types present in the data
+        query_types = set()
+        for key in data.keys():
+            for qt in ['title-only', 'title-plus-narrative', 'title-plus-description']:
+                if f'_{qt}' in key:
+                    query_types.add(qt)
         
-        # Add PRF strategies sorted alphabetically
-        prf_keys = [k for k in sorted(data.keys()) if k.startswith('prf_')]
-        sorted_keys.extend(prf_keys)
+        # Sort query types for consistent ordering
+        query_types = sorted(query_types)
         
-        for key in sorted_keys:
-            df = data[key]
-            if len(df) == 0:
-                continue
-                
-            display_name = get_strategy_display_name(key).replace('\n', ' ')
+        # For each query type, show baseline, rerank, then PRF strategies
+        for qt in query_types:
+            qt_display = qt.replace('-', ' ').title()
+            print(f"\n  Query Type: {qt_display}")
+            print(f"  {'-' * 55}")
             
-            if key == 'baseline':
+            # Baseline for this query type
+            baseline_key = f'baseline_{qt}'
+            if baseline_key in data and len(data[baseline_key]) > 0:
+                df = data[baseline_key]
+                display_name = get_strategy_display_name(baseline_key).replace('\n', ' ')
                 baseline_val = df[metric].iloc[0]
-                print(f"{display_name}: {baseline_val:.4f}")
-            elif key == 'rerank':
+                print(f"  {display_name}: {baseline_val:.4f}")
+            
+            # Rerank for this query type
+            rerank_key = f'rerank_{qt}'
+            if rerank_key in data and len(data[rerank_key]) > 0:
+                df = data[rerank_key]
                 best = df.loc[df[metric].idxmax()]
-                print(f"Best {display_name}: {best[metric]:.4f} (depth={int(best['depth'])})")
-            else:
+                display_name = get_strategy_display_name(rerank_key).replace('\n', ' ')
+                print(f"  Best {display_name}: {best[metric]:.4f} (depth={format_depth(best['depth'])})")
+            
+            # PRF strategies for this query type
+            prf_keys = [k for k in sorted(data.keys()) 
+                       if k.startswith('prf_') and k.endswith(f'_{qt}')]
+            
+            for key in prf_keys:
+                df = data[key]
+                if len(df) == 0:
+                    continue
+                
                 best = df.loc[df[metric].idxmax()]
+                display_name = get_strategy_display_name(key).replace('\n', ' ')
                 strategy_name = display_name.replace('PRF + ', '')
-                print(f"Best {strategy_name}: {best[metric]:.4f} "
-                      f"(k={int(best['depth'])}, e={int(best['e'])}, λ={best['lambda']:.2f})")
+                print(f"  Best {strategy_name}: {best[metric]:.4f} "
+                      f"(k={format_depth(best['depth'])}, e={format_e(best['e'])}, λ={best['lambda']:.2f})")
+        
+        # Also handle legacy keys without query type
+        legacy_keys = [k for k in data.keys() if not any(f'_{qt}' in k for qt in query_types)]
+        if legacy_keys:
+            print(f"\n  Legacy (no query type specified)")
+            print(f"  {'-' * 55}")
+            
+            for key in sorted(legacy_keys):
+                df = data[key]
+                if len(df) == 0:
+                    continue
+                    
+                display_name = get_strategy_display_name(key).replace('\n', ' ')
+                
+                if key == 'baseline':
+                    baseline_val = df[metric].iloc[0]
+                    print(f"  {display_name}: {baseline_val:.4f}")
+                elif key == 'rerank':
+                    best = df.loc[df[metric].idxmax()]
+                    print(f"  Best {display_name}: {best[metric]:.4f} (depth={format_depth(best['depth'])})")
+                elif key.startswith('prf_'):
+                    best = df.loc[df[metric].idxmax()]
+                    strategy_name = display_name.replace('PRF + ', '')
+                    print(f"  Best {strategy_name}: {best[metric]:.4f} "
+                          f"(k={format_depth(best['depth'])}, e={format_e(best['e'])}, λ={best['lambda']:.2f})")
 
 def main():
     print("\n" + "="*60)
@@ -624,11 +637,6 @@ def main():
                 plot_e_impact(df, metric, strategy_name, dataset_display)
                 plot_depth_impact(df, metric, strategy_name, dataset_display)
                 plot_heatmap(df, metric, strategy_name, dataset_display)
-            
-            # Generate 3D surface plots
-            print(f"  Generating 3D surface plots for {strategy_name}:")
-            for metric in metrics:
-                plot_3d_surface(df, metric, strategy_name, dataset_display)
             print()
     
     print("="*60)
@@ -658,14 +666,6 @@ if __name__ == "__main__":
         import seaborn
     except ImportError:
         missing_packages.append('seaborn')
-    
-    # scipy is optional for 3D plots
-    try:
-        import scipy
-    except ImportError:
-        print("Note: scipy not installed - 3D surface plots will be skipped")
-        print("  To enable 3D plots, install with: pip install scipy")
-        print()
     
     if missing_packages:
         print(f"Error: Missing required packages: {', '.join(missing_packages)}")

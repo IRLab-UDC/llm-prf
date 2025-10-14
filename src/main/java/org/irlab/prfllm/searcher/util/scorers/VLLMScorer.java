@@ -29,7 +29,7 @@ public class VLLMScorer {
         public final boolean isRelevant;
         public final double probTrue;
         public final double probFalse;
-        
+
         public VLLMResult(boolean isRelevant, double probTrue, double probFalse) {
             this.isRelevant = isRelevant;
             this.probTrue = probTrue;
@@ -40,29 +40,38 @@ public class VLLMScorer {
     /**
      * Evaluate document relevance and return full result with probabilities
      * 
-     * @param query The search query
+     * @param query    The search query
      * @param document The document text to evaluate
      * @return VLLMResult containing relevance decision and probabilities
      */
-    public static VLLMResult evaluate(String query, String document) {
+    public static VLLMResult evaluate(String query, String narrative, String document) {
         try {
             URL url = URI.create(SERVICE_URL).toURL();
             HttpURLConnection con = (HttpURLConnection) url.openConnection();
             con.setRequestMethod("POST");
             con.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
             con.setDoOutput(true);
-
+            // We eliminate any line breaks and excessive spaces
+            String processedDocument = document.replaceAll("\\s+", " ").trim();
+            // we also replace "|" and "-" with " "
+            processedDocument = processedDocument.replaceAll("[|\\-]+", " ");
             // Create prompt in the format: [document] ... [query] ... Relevant:
             String prompt = String.format(
-                "Given the following query and document, determine if the document is relevant (true) to the query or not (false).\n\n" +
-                "Query: %s\n\n" +
-                "Document:\n %s\n",
-                query, document
-            );
+                    "You are an expert TREC assessor. Your task is to judge relevance.\n\n" +
+                            "Instructions:\n" +
+                            "\t1. Read the query carefully.\n" +
+                            "\t2. Read the document.\n" +
+                            "\t3. Decide if the document provides information that answers or helps address the query.\n"+
+                            "\t4. Respond with 'true' if the document is relevant, or 'false' if it is not.\n\n" +
+                            "Query: %s\n\n" +
+                            (narrative != null && !narrative.isEmpty() ? String.format("Assessor instructions:\n%s\n\n", narrative) : "") +
+                            "Document:\n%s\n",
+                    query.trim(), processedDocument);
+
             // Create JSON payload using Jackson
             ObjectNode payload = objectMapper.createObjectNode();
             payload.put("prompt", prompt);
-            
+
             try (OutputStream os = con.getOutputStream()) {
                 byte[] input = objectMapper.writeValueAsBytes(payload);
                 os.write(input);
@@ -84,13 +93,13 @@ public class VLLMScorer {
             return new VLLMResult(false, 0.0, 1.0);
         }
     }
-    
+
     /**
      * Convenience method: returns only boolean relevance
      * Document is considered relevant if p_true > p_false
      */
-    public static boolean isRelevant(String query, String document) {
-        return evaluate(query, document).isRelevant;
+    public static boolean isRelevant(String query, String narrative, String document) {
+        return evaluate(query, narrative, document).isRelevant;
     }
 
     /**
@@ -99,22 +108,23 @@ public class VLLMScorer {
      */
     private static VLLMResult parseResponse(String json) {
         try {
-            Map<String, Object> response = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
-            
+            Map<String, Object> response = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {
+            });
+
             double probTrue = getDoubleValue(response, "p_true");
             double probFalse = getDoubleValue(response, "p_false");
-            
+
             // Document is relevant if probability of "true" is higher than "false"
             boolean isRelevant = probTrue > probFalse;
-            
+
             return new VLLMResult(isRelevant, probTrue, probFalse);
-            
+
         } catch (Exception e) {
             System.err.println("Error parsing VLLM response: " + e.getMessage());
             return new VLLMResult(false, 0.0, 1.0);
         }
     }
-    
+
     /**
      * Extract double value from response map, handling various numeric types
      */

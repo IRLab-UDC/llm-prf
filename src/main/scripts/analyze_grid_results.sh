@@ -1,4 +1,6 @@
 #!/bin/bash
+# Note: Not using 'set -e' because parallel returns exit code 2 if any job fails,
+# but we want to continue with consolidation even if some evaluations fail
 
 # Script to evaluate and analyze grid search results
 # Requires rec_eval to be installed
@@ -60,40 +62,83 @@ echo -e "${BLUE}  Grid Search Results Analysis${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
-# Discover RF strategies dynamically from run file names
-echo "Discovering RF strategies from run files..."
-RF_STRATEGIES=()
+# Discover RF strategies AND query types dynamically from run file names
+echo "Discovering RF strategies and query types from run files..."
+declare -A STRATEGY_QUERY_COMBOS  # Associative array to store unique strategy+query combinations
 if [ -d "$RUN_FOLDER" ]; then
-    # Extract unique RF strategies from filenames that match the pattern _rfStrategy-XXXX_rfModel
-    while IFS= read -r strategy; do
-        RF_STRATEGIES+=("$strategy")
-    done < <(find "$RUN_FOLDER" -name "*_rfStrategy-*_rfModel*" -type f | \
-             sed 's/.*_rfStrategy-\([^_]*\).*/\1/' | \
-             sort -u)
+    # Extract unique combinations of RF strategy + query type
+    while IFS= read -r file; do
+        # Extract strategy
+        if [[ "$file" =~ _rfStrategy-([^_]+) ]]; then
+            strategy="${BASH_REMATCH[1]}"
+            
+            # Extract query type (title_only, title_plus_narrative, title_plus_description)
+            if [[ "$file" =~ _(title_only|title_plus_narrative|title_plus_description)_ ]]; then
+                query_type="${BASH_REMATCH[1]}"
+                
+                # Store combination as "STRATEGY::QUERYTYPE"
+                STRATEGY_QUERY_COMBOS["${strategy}::${query_type}"]=1
+            fi
+        fi
+    done < <(find "$RUN_FOLDER" -name "*_rfStrategy-*_rfModel*" -type f)
 fi
 
-echo "Detected RF strategies: ${RF_STRATEGIES[@]:-none}"
+# Also discover query types for baseline and rerank files
+declare -A BASELINE_QUERY_TYPES
+declare -A RERANK_QUERY_TYPES
+
+while IFS= read -r file; do
+    filename=$(basename "$file")
+    if [[ "$filename" =~ _(title_only|title_plus_narrative|title_plus_description)($|_) ]]; then
+        query_type="${BASH_REMATCH[1]}"
+        
+        # Check if it's baseline or rerank
+        if [[ "$filename" =~ ^LMDirichlet-[0-9]+_${query_type}$ ]]; then
+            BASELINE_QUERY_TYPES["$query_type"]=1
+        elif [[ "$filename" =~ rerank-mono[tT]5 ]]; then
+            RERANK_QUERY_TYPES["$query_type"]=1
+        fi
+    fi
+done < <(find "$RUN_FOLDER" -name "LMDirichlet*" -type f)
+
+echo "Detected strategy+query combinations:"
+for combo in "${!STRATEGY_QUERY_COMBOS[@]}"; do
+    echo "  - $combo"
+done
 echo ""
 
 # Initialize summary files
 declare -A SUMMARY_FILES
-SUMMARY_BASELINE="$RESULTS_DIR/summary_baseline.tsv"
-SUMMARY_RERANK="$RESULTS_DIR/summary_monot5_rerank.tsv"
 
-# Create summary files for each detected RF strategy
-for strategy in "${RF_STRATEGIES[@]}"; do
-    # Convert strategy name to lowercase and replace hyphens with underscores for file naming
-    strategy_file=$(echo "$strategy" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-    SUMMARY_FILES["$strategy"]="$RESULTS_DIR/summary_prf_${strategy_file}.tsv"
+# Create summary files for baseline (one per query type)
+for query_type in "${!BASELINE_QUERY_TYPES[@]}"; do
+    query_file=$(echo "$query_type" | tr '_' '-')
+    summary_file="$RESULTS_DIR/summary_baseline_${query_file}.tsv"
+    echo -e "run_name\tmap\tP@10\tndcg@100" > "$summary_file"
+    SUMMARY_FILES["baseline::$query_type"]="$summary_file"
 done
 
-# Create headers for baseline and reranker
-echo -e "run_name\tmap\tP@10\tndcg@100" > "$SUMMARY_BASELINE"
-echo -e "run_name\tdepth\tmap\tP@10\tndcg@100" > "$SUMMARY_RERANK"
+# Create summary files for rerank (one per query type)
+for query_type in "${!RERANK_QUERY_TYPES[@]}"; do
+    query_file=$(echo "$query_type" | tr '_' '-')
+    summary_file="$RESULTS_DIR/summary_monot5_rerank_${query_file}.tsv"
+    echo -e "run_name\tdepth\tmap\tP@10\tndcg@100" > "$summary_file"
+    SUMMARY_FILES["rerank::$query_type"]="$summary_file"
+done
 
-# Create headers for PRF strategies
-for strategy in "${RF_STRATEGIES[@]}"; do
-    echo -e "run_name\tdepth\te\tlambda\tmap\tP@10\tndcg@100" > "${SUMMARY_FILES[$strategy]}"
+# Create summary files for each strategy+query combination
+for combo in "${!STRATEGY_QUERY_COMBOS[@]}"; do
+    # Split combo by :: using bash parameter expansion
+    strategy="${combo%%::*}"     # Everything before ::
+    query_type="${combo##*::}"   # Everything after ::
+    
+    # Convert to filename-friendly format
+    strategy_file=$(echo "$strategy" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+    query_file=$(echo "$query_type" | tr '_' '-')
+    
+    summary_file="$RESULTS_DIR/summary_prf_${strategy_file}_${query_file}.tsv"
+    echo -e "run_name\tdepth\te\tlambda\tmap\tP@10\tndcg@100" > "$summary_file"
+    SUMMARY_FILES["$combo"]="$summary_file"
 done
 
 echo "Evaluating runs..."
@@ -136,26 +181,44 @@ evaluate_run() {
     # Also get per-query MAP for robustness index calculation (saved to separate file)
     rec_eval -q -m map "$QRELS_PATH" "$run_file" 2>/dev/null | grep -v "^map\s*all" > "$TEMP_DIR/perquery_${run_name}.txt"
 
+    # Extract query type from run name
+    local query_type=""
+    if [[ "$run_name" =~ _(title_only|title_plus_narrative|title_plus_description)($|_) ]]; then
+        query_type="${BASH_REMATCH[1]}"
+    else
+        # Skip files without recognized query type
+        return
+    fi
+    
+    # Convert query type to filename format (underscores to hyphens)
+    local query_type_file=$(echo "$query_type" | tr '_' '-')
+
     # Parse run name to extract parameters and classify
-    if [[ "$run_name" =~ ^LMDirichlet-[0-9]+_title_only$ ]]; then
+    # Check for baseline: LMDirichlet-<mu>_<query_type> (exact match, nothing else after)
+    if [[ "$run_name" =~ ^LMDirichlet-[0-9]+_(title_only|title_plus_narrative|title_plus_description)$ ]]; then
         # Baseline (no reranking, no PRF)
-        echo -e "$run_name\t$map\t$p10\t$ndcg100" >> "$TEMP_DIR/baseline.tsv"
+        echo -e "$run_name\t$map\t$p10\t$ndcg100" >> "$TEMP_DIR/baseline_${query_type_file}.tsv"
         
     elif [[ "$run_name" =~ .*rerank-mono[tT]5_topK-([0-9]+) ]]; then
-        # Check if it's not a PRF file
+        # MonoT5 reranker
         local depth="${BASH_REMATCH[1]}"
-        echo -e "$run_name\t$depth\t$map\t$p10\t$ndcg100" >> "$TEMP_DIR/rerank.tsv"
+        echo -e "$run_name\t$depth\t$map\t$p10\t$ndcg100" >> "$TEMP_DIR/rerank_${query_type_file}.tsv"
         
-    elif [[ "$run_name" =~ _rfStrategy-([^_]+)_rfModel.*topK-([0-9]+)_lambda-([0-9.]+)_e-([0-9]+) ]]; then
+    elif [[ "$run_name" =~ _rfStrategy-([^_]+)_rfModel.*_lambda-([0-9.]+)_e-([0-9]+) ]]; then
         # PRF with detected strategy
         local strategy="${BASH_REMATCH[1]}"
-        local depth="${BASH_REMATCH[2]}"
-        local lambda="${BASH_REMATCH[3]}"
-        local e="${BASH_REMATCH[4]}"
+        local lambda="${BASH_REMATCH[2]}"
+        local e="${BASH_REMATCH[3]}"
+        
+        # Extract depth (topK) if present, otherwise use "all" for ORACLE
+        local depth="all"
+        if [[ "$run_name" =~ topK-([0-9]+) ]]; then
+            depth="${BASH_REMATCH[1]}"
+        fi
         
         # Convert strategy name for filename
         local strategy_file=$(echo "$strategy" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-        echo -e "$run_name\t$depth\t$e\t$lambda\t$map\t$p10\t$ndcg100" >> "$TEMP_DIR/prf_${strategy_file}.tsv"
+        echo -e "$run_name\t$depth\t$e\t$lambda\t$map\t$p10\t$ndcg100" >> "$TEMP_DIR/prf_${strategy_file}_${query_type_file}.tsv"
     fi
 }
 
@@ -169,7 +232,7 @@ if command -v parallel &> /dev/null; then
     echo "Using GNU parallel for evaluation..."
     echo ""
     find "$RUN_FOLDER" -type f -name "LMDirichlet*" | \
-        parallel -j "$NUM_CORES" --progress --bar evaluate_run {} "$QRELS_PATH" "$TEMP_DIR"
+        parallel -j "$NUM_CORES" --progress --bar evaluate_run {} "$QRELS_PATH" "$TEMP_DIR" || true
 else
     echo "Using xargs for parallel evaluation (install GNU parallel for better progress tracking)..."
     echo "  sudo apt install parallel  # Ubuntu/Debian"
@@ -217,25 +280,46 @@ echo ""
 echo "Consolidating results..."
 
 # Move per-query results to permanent location
-if compgen -G "$TEMP_DIR/perquery_*.txt" > /dev/null; then
+shopt -s nullglob
+perquery_files=("$TEMP_DIR"/perquery_*.txt)
+if [ ${#perquery_files[@]} -gt 0 ]; then
     mv "$TEMP_DIR"/perquery_*.txt "$RESULTS_DIR/per_query/" 2>/dev/null || true
 fi
+shopt -u nullglob
 
-# Consolidate results from temporary files
-if [ -f "$TEMP_DIR/baseline.tsv" ]; then
-    cat "$TEMP_DIR/baseline.tsv" >> "$SUMMARY_BASELINE"
-fi
-
-if [ -f "$TEMP_DIR/rerank.tsv" ]; then
-    cat "$TEMP_DIR/rerank.tsv" >> "$SUMMARY_RERANK"
-fi
-
-# Consolidate PRF strategy results
-for strategy in "${RF_STRATEGIES[@]}"; do
-    strategy_file=$(echo "$strategy" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-    temp_file="$TEMP_DIR/prf_${strategy_file}.tsv"
+# Consolidate baseline results (one file per query type)
+for query_type in "${!BASELINE_QUERY_TYPES[@]}"; do
+    query_type_file=$(echo "$query_type" | tr '_' '-')
+    temp_file="$TEMP_DIR/baseline_${query_type_file}.tsv"
     if [ -f "$temp_file" ]; then
-        cat "$temp_file" >> "${SUMMARY_FILES[$strategy]}"
+        summary_file="${SUMMARY_FILES["baseline::$query_type"]}"
+        cat "$temp_file" >> "$summary_file"
+    fi
+done
+
+# Consolidate rerank results (one file per query type)
+for query_type in "${!RERANK_QUERY_TYPES[@]}"; do
+    query_type_file=$(echo "$query_type" | tr '_' '-')
+    temp_file="$TEMP_DIR/rerank_${query_type_file}.tsv"
+    if [ -f "$temp_file" ]; then
+        summary_file="${SUMMARY_FILES["rerank::$query_type"]}"
+        cat "$temp_file" >> "$summary_file"
+    fi
+done
+
+# Consolidate PRF strategy+query results
+for combo in "${!STRATEGY_QUERY_COMBOS[@]}"; do
+    # Split combo by :: using bash parameter expansion
+    strategy="${combo%%::*}"     # Everything before ::
+    query_type="${combo##*::}"   # Everything after ::
+    
+    strategy_file=$(echo "$strategy" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+    query_type_file=$(echo "$query_type" | tr '_' '-')
+    temp_file="$TEMP_DIR/prf_${strategy_file}_${query_type_file}.tsv"
+    
+    if [ -f "$temp_file" ]; then
+        summary_file="${SUMMARY_FILES[$combo]}"
+        cat "$temp_file" >> "$summary_file"
     fi
 done
 
@@ -269,24 +353,41 @@ show_best() {
           else printf "  depth=%s, e=%s, lambda=%s -> MAP=%.4f, P@10=%.4f, ndcg@100=%.4f\n", $2, $3, $4, $5, $6, $7}'
 }
 
-# Baseline
-if [ -f "$SUMMARY_BASELINE" ] && [ $(wc -l < "$SUMMARY_BASELINE") -gt 1 ]; then
-    echo -e "${YELLOW}Baseline (LM Dirichlet):${NC}"
-    tail -n +2 "$SUMMARY_BASELINE" | awk -F'\t' '{printf "  MAP=%.4f, P@10=%.4f, ndcg@100=%.4f\n", $2, $3, $4}'
-    echo ""
-fi
+# Show best configurations for each query type
 
-# MonoT5 Reranker
-show_best "$SUMMARY_RERANK" "MonoT5 Reranker" "3" "MAP"
-echo ""
-
-# Dynamic PRF strategies
-for strategy in "${RF_STRATEGIES[@]}"; do
-    summary_file="${SUMMARY_FILES[$strategy]}"
+# Baseline (per query type)
+for query_type in "${!BASELINE_QUERY_TYPES[@]}"; do
+    summary_file="${SUMMARY_FILES["baseline::$query_type"]}"
     if [ -f "$summary_file" ] && [ $(wc -l < "$summary_file") -gt 1 ]; then
-        # Create a human-readable strategy name
+        query_display=$(echo "$query_type" | sed 's/_/ /g')
+        echo -e "${YELLOW}Baseline (LM Dirichlet) - $query_display:${NC}"
+        tail -n +2 "$summary_file" | awk -F'\t' '{printf "  MAP=%.4f, P@10=%.4f, ndcg@100=%.4f\n", $2, $3, $4}'
+        echo ""
+    fi
+done
+
+# MonoT5 Reranker (per query type)
+for query_type in "${!RERANK_QUERY_TYPES[@]}"; do
+    summary_file="${SUMMARY_FILES["rerank::$query_type"]}"
+    if [ -f "$summary_file" ] && [ $(wc -l < "$summary_file") -gt 1 ]; then
+        query_display=$(echo "$query_type" | sed 's/_/ /g')
+        show_best "$summary_file" "MonoT5 Reranker - $query_display" "3" "MAP"
+        echo ""
+    fi
+done
+
+# PRF strategies (per strategy+query combination)
+for combo in "${!STRATEGY_QUERY_COMBOS[@]}"; do
+    # Split combo by :: using bash parameter expansion
+    strategy="${combo%%::*}"      # Everything before ::
+    query_type="${combo##*::}"    # Everything after ::
+    summary_file="${SUMMARY_FILES[$combo]}"
+    
+    if [ -f "$summary_file" ] && [ $(wc -l < "$summary_file") -gt 1 ]; then
+        # Create human-readable names
         strategy_display=$(echo "$strategy" | sed 's/-/ /g')
-        show_best "$summary_file" "PRF + $strategy_display filter" "5" "MAP"
+        query_display=$(echo "$query_type" | sed 's/_/ /g')
+        show_best "$summary_file" "PRF + $strategy_display filter - $query_display" "5" "MAP"
         echo ""
     fi
 done
@@ -294,12 +395,10 @@ done
 echo -e "${BLUE}========================================${NC}"
 echo ""
 echo "Summary files created:"
-echo "  - $SUMMARY_BASELINE"
-echo "  - $SUMMARY_RERANK"
 
-# List dynamic PRF strategy files
-for strategy in "${RF_STRATEGIES[@]}"; do
-    summary_file="${SUMMARY_FILES[$strategy]}"
+# List all created summary files
+for key in "${!SUMMARY_FILES[@]}"; do
+    summary_file="${SUMMARY_FILES[$key]}"
     if [ -f "$summary_file" ]; then
         echo "  - $summary_file"
     fi
