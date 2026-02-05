@@ -5,9 +5,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <groupId>org.irlab</groupId>
-    <artifactId>prf-llm</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
-    <name>PRF-LLM</name>
+    <artifactId>ecir26</artifactId>
+    <version>1.0</version>
+    <name>ecir26</name>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>21</maven.compiler.source>
@@ -92,7 +92,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>org.irlab.prfllm.searcher.TRECSearcherLucene</mainClass>
+                            <mainClass>org.irlab.ecir26.Main</mainClass>
                         </manifest>
                     </archive>
                     <descriptorRefs>

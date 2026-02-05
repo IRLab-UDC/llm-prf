@@ -99,7 +99,7 @@ For Ollama-based strategies:
 #### Single Run
 ```bash
 java -cp target/prf-llm-0.0.1-SNAPSHOT-jar-with-dependencies.jar \
-  org.irlab.prfllm.searcher.TRECSearcherLucene \
+  org.irlab.ecir26.searcher.TRECSearcherLucene \
   --index_path /path/to/index \
   --topics_path /path/to/topics \
   --qrels_path /path/to/qrels \
