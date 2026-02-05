@@ -57,15 +57,15 @@ public class TRECIndexerLuceneRM {
       System.out.println("Indexing documents from: " + datasetPath);
       System.out.println("Output index: " + indexPath);
       System.out.println("=".repeat(80));
-      
+
       long startTime = System.currentTimeMillis();
       indexDocs(writer, new File(datasetPath));
 
       writer.close();
-      
+
       long endTime = System.currentTimeMillis();
       long totalTime = (endTime - startTime) / 1000;
-      
+
       System.out.println("=".repeat(80));
       System.out.println("✓ Indexing completed.");
       System.out.println("✓ Total documents indexed: " + totalDocsIndexed.get());
@@ -84,7 +84,7 @@ public class TRECIndexerLuceneRM {
         System.out.println("⊗ Skipping info directory: " + file.getAbsolutePath());
         return;
       }
-      
+
       // Sort files alphabetically to ensure deterministic indexing order
       File[] files = file.listFiles();
       if (files != null) {
@@ -112,8 +112,7 @@ public class TRECIndexerLuceneRM {
       }
       // MS MARCO files start with JSON objects containing "id" and "contents"
       // TREC files typically start with <DOC> or other XML tags
-      return firstLine.trim().startsWith("{") &&
-          (firstLine.contains("\"id\"") || firstLine.contains("\"contents\""));
+      return firstLine.trim().startsWith("{") && (firstLine.contains("\"id\"") || firstLine.contains("\"contents\""));
     }
   }
 
@@ -124,10 +123,10 @@ public class TRECIndexerLuceneRM {
 
   private static void indexDocMsMarco(IndexWriter writer, File file) throws IOException {
     System.out.println("→ Processing MS MARCO file: " + file.getName());
-    
+
     Gson gson = new Gson(); // Gson instance for parsing JSON
     int docsInFile = 0;
-    
+
     try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
       String jsonLine;
       int lineNumber = 0;
@@ -166,25 +165,25 @@ public class TRECIndexerLuceneRM {
         } catch (Exception e) {
           // Catch parsing exceptions (malformed JSON) or Lucene errors.
           System.err.println("  ✗ Error processing line "
-              + lineNumber
-              + " in file "
-              + file.getName()
-              + ": "
-              + e.getMessage());
+                             + lineNumber
+                             + " in file "
+                             + file.getName()
+                             + ": "
+                             + e.getMessage());
           // You can choose to throw the exception or simply continue with the next
           // document.
         }
       }
-      
+
       System.out.println("  ✓ Indexed " + docsInFile + " documents from " + file.getName());
     }
   }
 
   private static void indexDoc(IndexWriter writer, File file) throws IOException {
     System.out.println("→ Processing TREC file: " + file.getAbsolutePath());
-    
+
     int docsInFile = 0;
-    
+
     try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
       StringBuilder docBuffer = new StringBuilder();
       String line;
@@ -215,7 +214,7 @@ public class TRECIndexerLuceneRM {
           docBuffer.append(line).append("\n");
         }
       }
-      
+
       System.out.println("  ✓ Indexed " + docsInFile + " documents from " + file.getName());
     }
   }
@@ -236,7 +235,7 @@ public class TRECIndexerLuceneRM {
 
     // Detect if this is a web collection (WT10G) based on DOCNO format
     boolean isWebCollection = docno != null && docno.trim().startsWith("WTX");
-      StringBuilder fullText = new StringBuilder();
+    StringBuilder fullText = new StringBuilder();
 
     // Extract TITLE/HEAD (raw)
     String title = extractTagContent(docString, "HEAD");
@@ -248,15 +247,15 @@ public class TRECIndexerLuceneRM {
     }
 
     // Extract TEXT/CONTENT (raw)
-     String text = extractTagContent(docString, "TEXT");
+    String text = extractTagContent(docString, "TEXT");
     if (text != null) {
       // Clean HTML from text if web collection
       String cleanText = isWebCollection ? cleanHtmlContent(text) : cleanRobustContent(text);
       doc.add(new Field("CONTENT", cleanText.trim(), customType));
       fullText.append(cleanText.trim());
-    }else{
-     // In the case of web collections there is no explicit TEXT tag, the content is everything from the end of the header </DOCHDR> until the end of the doc </DOC>
-      String headerEndTag = "</DOCHDR>"; 
+    } else {
+      // In the case of web collections there is no explicit TEXT tag, the content is everything from the end of the header </DOCHDR> until the end of the doc </DOC>
+      String headerEndTag = "</DOCHDR>";
       int headerEndIndex = docString.indexOf(headerEndTag);
       int docEndIndex = docString.indexOf("</DOC>");
       if (headerEndIndex != -1 && docEndIndex != -1 && docEndIndex > headerEndIndex) {

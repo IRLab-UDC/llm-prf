@@ -1,10 +1,11 @@
 package org.irlab.prfllm.searcher.rf;
-import java.util.Map;
 
 import org.irlab.prfllm.searcher.util.TermWeights;
 
+import java.util.Map;
+
 public interface RelevanceFeedback {
 
-    TermWeights getTermWeights(final Map<Integer,Double> relevanceSet);
+  TermWeights getTermWeights(final Map<Integer, Double> relevanceSet);
 }
 

@@ -1,16 +1,16 @@
 package org.irlab.prfllm.searcher.util;
 
+import org.apache.lucene.document.Document;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.TopDocs;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-
-import org.apache.lucene.document.Document;
-import org.apache.lucene.search.IndexSearcher;
-import org.apache.lucene.search.ScoreDoc;
-import org.apache.lucene.search.TopDocs;
 
 /**
  * Utility class for TREC-related operations such as parsing topics and writing run files.
@@ -29,7 +29,7 @@ public class TRECUtils {
 
   /**
    * Parse TREC topics file in standard TREC format.
-   * 
+   *
    * @param topicsPath Path to the TREC topics file
    * @return List of parsed topics
    * @throws IOException If file cannot be read
@@ -41,10 +41,10 @@ public class TRECUtils {
     Topic topic = null;
     StringBuilder narrative = null;
     boolean inNarrative = false;
-    
+
     while ((line = br.readLine()) != null) {
       String trimmedLine = line.trim();
-      
+
       // Check if we're entering a new tag section (exits narrative mode)
       if (trimmedLine.startsWith("<") && !trimmedLine.startsWith("</top>")) {
         // If we were in narrative mode, save it
@@ -54,14 +54,13 @@ public class TRECUtils {
           narrative = null;
         }
       }
-      
+
       if (trimmedLine.startsWith("<num>")) {
         topic = new Topic();
         topic.num = line.replaceAll("[^0-9]", "");
       } else if (trimmedLine.startsWith("<title>")) {
         // Remove the <title> tag and optional "Topic:" prefix
-        if (topic != null)
-          topic.title = line.replace("<title>", "").replace("Topic:", "").trim();
+        if (topic != null) topic.title = line.replace("<title>", "").replace("Topic:", "").trim();
       } else if (trimmedLine.startsWith("<desc>")) {
         // Description can be on the same line or the next line
         String descText = line.replace("<desc>", "").replace("Description:", "").trim();
@@ -73,8 +72,7 @@ public class TRECUtils {
           }
         } else {
           // Description is on the same line
-          if (topic != null)
-            topic.description = descText;
+          if (topic != null) topic.description = descText;
         }
       } else if (trimmedLine.startsWith("<narr>")) {
         inNarrative = true;
@@ -110,16 +108,16 @@ public class TRECUtils {
 
   /**
    * Write results to TREC run file format.
-   * 
-   * @param writer BufferedWriter for output file
-   * @param qid Query ID
-   * @param results TopDocs containing search results
+   *
+   * @param writer   BufferedWriter for output file
+   * @param qid      Query ID
+   * @param results  TopDocs containing search results
    * @param searcher IndexSearcher to retrieve document fields
-   * @param runTag Tag to identify the run (full tag for rank 1, "--" for others to save space)
+   * @param runTag   Tag to identify the run (full tag for rank 1, "--" for others to save space)
    * @throws IOException If writing fails
    */
   public static void writeTrecRun(BufferedWriter writer, String qid, TopDocs results, IndexSearcher searcher,
-      String runTag) throws IOException {
+                                  String runTag) throws IOException {
     int rank = 1;
     for (ScoreDoc sd : results.scoreDocs) {
       Document doc = searcher.storedFields().document(sd.doc);
