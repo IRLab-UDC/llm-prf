@@ -1,11 +1,10 @@
-package org.irlab.prfllm.searcher.util;
+package org.irlab.ecir26.searcher.util;
 
 import it.unimi.dsi.fastutil.objects.Object2DoubleMap;
 import it.unimi.dsi.fastutil.objects.Object2DoubleOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectSet;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
@@ -50,16 +49,8 @@ public final class TermWeights {
     weights.merge(term, weight, Double::sum);
   }
 
-  public void setTermWeight(String term, double weight) {
-    weights.put(term, weight);
-  }
-
   public double getTermWeight(String term) {
     return weights.getOrDefault(term, 0.0d);
-  }
-
-  public List<String> getTerms() {
-    return new ArrayList<>(weights.keySet());
   }
 
   public TermWeights scaleToL1Norm() {
@@ -71,14 +62,6 @@ public final class TermWeights {
   public double getL1Norm() {
     // The L1 norm is the sum of the absolute values of the weights
     return weights.values().stream().mapToDouble(Math::abs).sum();
-  }
-
-  public TermWeights sort() {
-
-    TermWeights sorted = new TermWeights();
-    sorted.weights = PutHashMapInOrder.sort(weights);
-
-    return sorted;
   }
 
   public void forEach(final BiConsumer<String, Double> consumer) {

@@ -8,13 +8,7 @@
 #    - depth: 5, 10, 25, 50, 75, 100
 #    - e (expansion terms): 5, 10, 15, 20, 25, 30
 #    - lambda (interpolation): 0.1 to 0.9 in steps of 0.1
-#    - RF strategies: RAW RM3, VLLM, VLLM-PROB, MONOT5, MONOT5-PROB, OLLAMA
-#
-# Usage:
-#   ./run_grid_search.sh [dataset] [options]
-#   ./run_grid_search.sh --skip-rerank        # Skip MonoT5 reranker, run only baseline + PRF
-#   ./run_grid_search.sh robust04             # Use ROBUST04 dataset
-#   ./run_grid_search.sh ap8889 --skip-rerank # Use AP8889 and skip reranker
+#    - RF strategies: RAW RM3, VLLM, VLLM-PROB, MONOT5, MONOT5-PROB
 
 set -e
 
@@ -63,7 +57,7 @@ if [ ! -f "$JAR_PATH" ]; then
 fi
 
 # Check if MonoT5 service is running
-if ! curl -s http://127.0.0.1:5000/health > /dev/null 2>&1; then
+if ! curl -s http://localhost:5000/health > /dev/null 2>&1; then
     echo -e "${YELLOW}Warning: MonoT5 service might not be running at http://127.0.0.1:5000${NC}"
     echo "Start it with: python src/main/python/mono_t5.py"
     read -p "Continue anyway? (y/n) " -n 1 -r
@@ -114,11 +108,11 @@ echo ""
 COUNTER=$((COUNTER + 1))
 echo -e "${GREEN}[$COUNTER/$TOTAL_EXPERIMENTS]${NC} Running baseline LMDirichlet with mu=$MU"
 
-java -cp "$JAR_PATH" org.irlab.prfllm.searcher.TRECSearcherLucene \
-    --index_path "$INDEX_PATH" \
-    --topics_path "$TOPICS_PATH" \
+java -cp "$JAR_PATH" org.irlab.ecir26.searcher.TRECSearcherLucene \
+    --index "$INDEX_PATH" \
+    --topics "$TOPICS_PATH" \
     --trec_run_folder "$RUN_FOLDER" \
-    --qrels_path "$QRELS_PATH" \
+    --qrels "$QRELS_PATH" \
     --search_by "$SEARCH_BY" \
     --rerank_method none \
     --prf_strategy none \
@@ -138,10 +132,10 @@ if [ "$SKIP_RERANK" = false ]; then
         COUNTER=$((COUNTER + 1))
         echo -e "${GREEN}[$COUNTER/$TOTAL_EXPERIMENTS]${NC} Running MonoT5 Reranker with depth=$depth"
         
-        java -cp "$JAR_PATH" org.irlab.prfllm.searcher.TRECSearcherLucene \
-            --index_path "$INDEX_PATH" \
-            --topics_path "$TOPICS_PATH" \
-            --qrels_path "$QRELS_PATH" \
+        java -cp "$JAR_PATH" org.irlab.ecir26.searcher.TRECSearcherLucene \
+            --index "$INDEX_PATH" \
+            --topics "$TOPICS_PATH" \
+            --qrels "$QRELS_PATH" \
             --trec_run_folder "$RUN_FOLDER" \
             --search_by "$SEARCH_BY" \
             --rerank_method monot5 \
@@ -191,10 +185,10 @@ for RF_STRATEGY in "${RF_STRATEGY_VALUES[@]}"; do
     
     echo -e "${GREEN}[$COUNTER/$((TOTAL_BASELINE + 1 + ${#RF_STRATEGY_VALUES[@]}))]${NC} Running ${RF_STRATEGY} PRF grid search..."
     
-    java -cp "$JAR_PATH" org.irlab.prfllm.searcher.TRECSearcherLucene \
-        --index_path "$INDEX_PATH" \
-        --topics_path "$TOPICS_PATH" \
-        --qrels_path "$QRELS_PATH" \
+    java -cp "$JAR_PATH" org.irlab.ecir26.searcher.TRECSearcherLucene \
+        --index "$INDEX_PATH" \
+        --topics "$TOPICS_PATH" \
+        --qrels "$QRELS_PATH" \
         --cache_dir "$CACHE_DIR" \
         --trec_run_folder "$RUN_FOLDER" \
         --search_by "$SEARCH_BY" \

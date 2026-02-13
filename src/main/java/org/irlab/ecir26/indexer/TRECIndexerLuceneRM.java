@@ -1,4 +1,4 @@
-package org.irlab.prfllm.indexer;
+package org.irlab.ecir26.indexer;
 
 import com.google.gson.Gson;
 import org.apache.lucene.analysis.Analyzer;
@@ -24,27 +24,33 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class TRECIndexerLuceneRM {
 
-  // Global counter for total documents indexed
+  // Global counter for total documents indexed.
   private static final AtomicInteger totalDocsIndexed = new AtomicInteger(0);
 
   public static void main(String[] args) {
-    String dataset = "wt10g";
-    String datasetPath = "/home/javier/data/datasets/" + dataset;
-    String indexPath = "/home/javier/data/indices/" + dataset + "_index";
+    String datasetPath = null;
+    String indexPath = null;
 
     for (int i = 0; i < args.length; i++) {
-      if ("--dataset_path".equals(args[i])) {
+      if ("--dataset".equals(args[i])) {
         datasetPath = args[++i];
-      } else if ("--index_path".equals(args[i])) {
+      } else if ("--index".equals(args[i])) {
         indexPath = args[++i];
       }
+    }
+
+    // Validate required arguments
+    if (datasetPath == null || indexPath == null) {
+      System.err.println("Error: Both --dataset and --index arguments are required.");
+      System.err.println("Usage: java -jar <jar> --dataset <path> --index <path>");
+      System.exit(1);
     }
 
     try {
       Directory dir = FSDirectory.open(Paths.get(indexPath));
       Analyzer analyzer = new StandardAnalyzer(EnglishAnalyzer.ENGLISH_STOP_WORDS_SET);
 
-      // Configure similarity to use a language model (LM)
+      // Configure similarity to use a language model (LM).
       Similarity similarity = new LMDirichletSimilarity();
 
       IndexWriterConfig iwc = new IndexWriterConfig(analyzer);
@@ -79,13 +85,13 @@ public class TRECIndexerLuceneRM {
 
   private static void indexDocs(final IndexWriter writer, File file) throws IOException {
     if (file.isDirectory()) {
-      // If it is the info directory (ignore it)
+      // If it is the info directory, ignore it.
       if (file.getName().equals("info")) {
         System.out.println("⊗ Skipping info directory: " + file.getAbsolutePath());
         return;
       }
 
-      // Sort files alphabetically to ensure deterministic indexing order
+      // Sort files alphabetically to ensure deterministic indexing order.
       File[] files = file.listFiles();
       if (files != null) {
         Arrays.sort(files, Comparator.comparing(File::getName));
@@ -94,7 +100,7 @@ public class TRECIndexerLuceneRM {
         }
       }
     } else {
-      // Detect format: MS MARCO (JSON) vs TREC (XML)
+      // Detect format: MS MARCO vs TREC.
       if (isMsMarcoFormat(file)) {
         indexDocMsMarco(writer, file);
       } else {
@@ -103,7 +109,7 @@ public class TRECIndexerLuceneRM {
     }
   }
 
-  // Helper method to detect if file is MS MARCO JSON format
+  // Helper method to detect if file is MS MARCO JSON format.
   private static boolean isMsMarcoFormat(File file) throws IOException {
     try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
       String firstLine = reader.readLine();
@@ -124,7 +130,7 @@ public class TRECIndexerLuceneRM {
   private static void indexDocMsMarco(IndexWriter writer, File file) throws IOException {
     System.out.println("→ Processing MS MARCO file: " + file.getName());
 
-    Gson gson = new Gson(); // Gson instance for parsing JSON
+    Gson gson = new Gson();
     int docsInFile = 0;
 
     try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
@@ -144,34 +150,29 @@ public class TRECIndexerLuceneRM {
         }
 
         try {
-          // 1. Parse the JSON line to the auxiliary object
           JsonDocument jsonDoc = gson.fromJson(jsonLine, JsonDocument.class);
 
-          // 2. Create the Lucene document
           Document doc = new Document();
 
-          // Field "id": Store it and don't tokenize it (StringField)
-          doc.add(new StringField("DOCNO", jsonDoc.id, Field.Store.YES));
+          // Docid: store it and don't tokenize it
+          doc.add(new StringField("docid", jsonDoc.id, Field.Store.YES));
 
-          // Field "contents": Index and tokenize for search (TextField)
+          // Field "content": Index and tokenize for search (TextField)
           // Also store it to display results, if necessary.
-          doc.add(new Field("TEXT", jsonDoc.contents, customType));
+          doc.add(new Field("content", jsonDoc.contents, customType));
 
-          // 3. Add the document to the IndexWriter
           writer.addDocument(doc);
           docsInFile++;
           totalDocsIndexed.incrementAndGet();
 
         } catch (Exception e) {
-          // Catch parsing exceptions (malformed JSON) or Lucene errors.
           System.err.println("  ✗ Error processing line "
                              + lineNumber
                              + " in file "
                              + file.getName()
                              + ": "
                              + e.getMessage());
-          // You can choose to throw the exception or simply continue with the next
-          // document.
+          throw new RuntimeException(e);
         }
       }
 
@@ -231,7 +232,7 @@ public class TRECIndexerLuceneRM {
     // Extract DOCNO (raw, no cleaning)
     String docno = extractTagContent(docString, "DOCNO");
 
-    doc.add(new TextField("DOCNO", docno != null ? docno.trim() : "", Field.Store.YES));
+    doc.add(new TextField("docid", docno != null ? docno.trim() : "", Field.Store.YES));
 
     // Detect if this is a web collection (WT10G) based on DOCNO format
     boolean isWebCollection = docno != null && docno.trim().startsWith("WTX");
@@ -242,7 +243,6 @@ public class TRECIndexerLuceneRM {
     if (title != null) {
       // Clean HTML from title if web collection
       String cleanTitle = isWebCollection ? cleanHtmlContent(title) : cleanRobustContent(title);
-      doc.add(new Field("HEAD", cleanTitle.trim(), customType));
       fullText.append(cleanTitle.trim()).append(" ");
     }
 
@@ -251,7 +251,6 @@ public class TRECIndexerLuceneRM {
     if (text != null) {
       // Clean HTML from text if web collection
       String cleanText = isWebCollection ? cleanHtmlContent(text) : cleanRobustContent(text);
-      doc.add(new Field("CONTENT", cleanText.trim(), customType));
       fullText.append(cleanText.trim());
     } else {
       // In the case of web collections there is no explicit TEXT tag, the content is everything from the end of the header </DOCHDR> until the end of the doc </DOC>
@@ -266,10 +265,7 @@ public class TRECIndexerLuceneRM {
       }
     }
 
-    doc.add(new Field("TEXT", fullText.toString().trim(), customType));
-    // Add filename and filepath for reference
-    doc.add(new TextField("filename", file.getName(), Field.Store.YES));
-    doc.add(new TextField("filepath", file.getAbsolutePath(), Field.Store.YES));
+    doc.add(new Field("content", fullText.toString().trim(), customType));
 
     return doc;
   }

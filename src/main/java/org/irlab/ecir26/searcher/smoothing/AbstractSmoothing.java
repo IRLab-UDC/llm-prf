@@ -1,11 +1,11 @@
-package org.irlab.prfllm.searcher.smoothing;
+package org.irlab.ecir26.searcher.smoothing;
 
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.util.BytesRef;
-import org.irlab.prfllm.searcher.util.StatsProvider;
+import org.irlab.ecir26.searcher.util.StatsProvider;
 
 import java.io.IOException;
 import java.util.Set;
@@ -17,11 +17,7 @@ public abstract class AbstractSmoothing implements Smoothing {
   protected final String docField;
   protected final StatsProvider statsProvider;
   private final ConcurrentHashMap<Pair<String, Integer>, Double> cacheSmoothed;
-  private final ConcurrentHashMap<Pair<String, Integer>, Double> cacheMLE;
-  private final ConcurrentHashMap<String, Double> cacheBackground;
   private final ConcurrentHashMap<Integer, Set<String>> cacheTerms;
-  private final ConcurrentHashMap<Pair<Integer, String>, Long> cacheDocLength;
-  protected StatsProvider statsProviderBackground = null;
 
   public AbstractSmoothing(double smoothingParameter, String docField, StatsProvider statsProvider) {
 
@@ -29,24 +25,7 @@ public abstract class AbstractSmoothing implements Smoothing {
     this.docField = docField;
     this.statsProvider = statsProvider;
     this.cacheSmoothed = new ConcurrentHashMap<>();
-    this.cacheMLE = new ConcurrentHashMap<>();
-    this.cacheBackground = new ConcurrentHashMap<>();
     this.cacheTerms = new ConcurrentHashMap<>();
-    this.cacheDocLength = new ConcurrentHashMap<>();
-  }
-
-  public AbstractSmoothing(double smoothingParameter, String docField, StatsProvider statsProvider,
-                           StatsProvider statsProviderBackground) {
-
-    this.smoothingParameter = smoothingParameter;
-    this.docField = docField;
-    this.statsProvider = statsProvider;
-    this.statsProviderBackground = statsProviderBackground;
-    this.cacheSmoothed = new ConcurrentHashMap<>();
-    this.cacheMLE = new ConcurrentHashMap<>();
-    this.cacheBackground = new ConcurrentHashMap<>();
-    this.cacheTerms = new ConcurrentHashMap<>();
-    this.cacheDocLength = new ConcurrentHashMap<>();
   }
 
   protected abstract double computeValue(String term, int doc);
@@ -67,51 +46,6 @@ public abstract class AbstractSmoothing implements Smoothing {
     return value;
   }
 
-  @Override
-  public double computeMLE(String term, int doc) {
-
-    Pair<String, Integer> key = Pair.of(term, doc);
-    Pair<Integer, String> keyDocLength = Pair.of(doc, docField);
-
-    long docLength;
-
-    if (cacheMLE.containsKey(key)) {
-
-      return cacheMLE.get(key);
-    }
-
-    final int termFreq = statsProvider.getTermFrequency(term, doc, docField);
-
-    if (cacheDocLength.containsKey(keyDocLength)) {
-      docLength = cacheDocLength.get(keyDocLength);
-    } else {
-      docLength = statsProvider.getDocTokensSize(doc, docField);
-      cacheDocLength.put(keyDocLength, docLength);
-    }
-
-    double value = (double) termFreq / docLength;
-
-    cacheMLE.put(key, value);
-    return value;
-  }
-
-  @Override
-  public double computeBackgroundProb(String term) {
-
-    StatsProvider provider = (statsProviderBackground != null) ? statsProviderBackground : statsProvider;
-
-    if (cacheBackground.containsKey(term)) {
-
-      return cacheBackground.get(term);
-    }
-
-    final long termTotalFrequency = provider.getTotalTermFrequency(term, docField);
-    final long collectionLength = provider.getCollectionTokensSize(docField);
-    double value = (double) termTotalFrequency / collectionLength;
-
-    cacheBackground.put(term, value);
-    return value;
-  }
 
   @Override
   public Set<String> getDocTerms(int doc) {
@@ -146,13 +80,6 @@ public abstract class AbstractSmoothing implements Smoothing {
 
     cacheTerms.put(doc, docTerms);
     return docTerms;
-  }
-
-  @Override
-  public boolean termExists(String term) {
-
-    long ttf = statsProvider.getTotalTermFrequency(term, docField);
-    return ttf > 0;
   }
 
   protected abstract String getName();

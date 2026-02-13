@@ -1,4 +1,4 @@
-package org.irlab.prfllm.searcher.util;
+package org.irlab.ecir26.searcher.util;
 
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.logging.log4j.LogManager;
@@ -16,7 +16,7 @@ public final class StatsProvider {
   private final ConcurrentHashMap<String, Long> cacheLexiconSize;
   private final ConcurrentHashMap<Pair<Integer, String>, Terms> cacheTermVector;
   private final ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> cacheDocTerm;
-  private TermVectors termvectors = null;
+  private TermVectors termvectors;
 
   public StatsProvider(IndexReader reader) {
 

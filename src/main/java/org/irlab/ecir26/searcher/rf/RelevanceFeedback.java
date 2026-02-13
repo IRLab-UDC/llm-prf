@@ -1,6 +1,6 @@
-package org.irlab.prfllm.searcher.rf;
+package org.irlab.ecir26.searcher.rf;
 
-import org.irlab.prfllm.searcher.util.TermWeights;
+import org.irlab.ecir26.searcher.util.TermWeights;
 
 import java.util.Map;
 

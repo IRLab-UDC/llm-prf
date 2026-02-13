@@ -4,13 +4,13 @@
 # This file contains dataset paths and configuration that can be sourced by other scripts
 
 # Base folder configuration
-FOLDER="/home/javier/data/"
+FOLDER="/path/base/folder/"
 
 # Dataset definitions (array format: index_name topics_file qrels_file)
-declare -a AP8889=("ap8889_index" "topics.51-100" "qrels.AP8889.51-100" "topics.101-200" "qrels_ap8889_101_200.txt")
-declare -a ROBUST04=("robust04_index" "topics.301-350.trec.txt" "qrels.robust04.300-450.601-700.trec.txt" "topics.351-400.trec.txt" "qrels.robust04.300-450.601-700.trec.txt")
-declare -a DL19=("msmarco_index" "topics.dl-19.trec" "qrels.dl19-passage.nist.trec.txt" "topics.dl-20.trec" "qrels.dl20-passage.nist.trec.txt")
-declare -a WT10G=("wt10g_index" "topics.451-500.trec.txt" "qrels.trec9.main_web" "topics.501-550" "qrels.wt10g.501-550")
+declare -a AP8889=("ap8889" "topics.51-100" "qrels.AP8889.51-100" "topics.101-200" "qrels_ap8889_101_200.txt")
+declare -a ROBUST04=("robust04" "topics.301-350.trec.txt" "qrels.robust04.300-450.601-700.trec.txt" "topics.351-400.trec.txt" "qrels.robust04.300-450.601-700.trec.txt")
+declare -a DL19=("msmarco" "topics.dl-19.trec" "qrels.dl19-passage.nist.trec.txt" "topics.dl-20.trec" "qrels.dl20-passage.nist.trec.txt")
+declare -a WT10G=("wt10g" "topics.451-500.trec.txt" "qrels.trec9.main_web" "topics.501-550" "qrels.wt10g.501-550")
 # Select active dataset (change this to switch datasets)
 # Options: DATASET=("${AP8889[@]}") or DATASET=("${ROBUST04[@]}")
 DATASET=("${AP8889[@]}")  # Currently set to AP8889
@@ -23,9 +23,9 @@ TOPICS_TEST="${DATASET[3]}"
 QRELS_TEST="${DATASET[4]}"
 
 # Construct full paths
-INDEX_PATH="${FOLDER}/indices/${INDEX}"
+INDEX_PATH="${FOLDER}/indexes/${INDEX}"
 TOPICS_PATH="${FOLDER}/topics/${TOPICS}"
-QRELS_PATH="${FOLDER}/topics/${QRELS}"
+QRELS_PATH="${FOLDER}/qrels/${QRELS}"
 RUN_FOLDER="${FOLDER}/runs/${INDEX}"
 RESULTS_DIR="${FOLDER}/grid_results/${INDEX}"
 CACHE_DIR="${FOLDER}/cache/${INDEX}"  # Collection-specific cache directory
@@ -41,19 +41,17 @@ NC='\033[0m' # No Color
 DEPTHS=(100 5 10 25 50 75)
 E_VALUES=(5 10 15 20 25 30)
 RF_STRATEGY_VALUES=("PRF" "MONOT5" "MONOT5-PROB" "VLLM" "VLLM-PROB" "ORACLE" "ORACLE-K")
-RF_STRATEGY_VALUES=("VLLM" "VLLM-PROB")
 LAMBDA_VALUES=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
 
 # Model parameters
 MU=2000
-SEARCH_BY="title_only"
-SEARCH_BY="title_plus_narrative"
+SEARCH_BY="content"
 RF_MODEL="RM3"
 PRF_SMOOTHING="Additive"
 PRF_SMOOTHING_PARAM=0.1
 
 # JAR path (relative to scripts directory)
-JAR_PATH="../prf-llm-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
+JAR_PATH="../ecir26-1.0-jar-with-dependencies.jar"
 
 # Function to switch dataset
 switch_dataset() {
