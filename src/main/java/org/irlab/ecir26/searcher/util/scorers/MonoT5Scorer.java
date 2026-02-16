@@ -1,4 +1,4 @@
-package org.irlab.prfllm.searcher.util.scorers;
+package org.irlab.ecir26.searcher.util.scorers;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,7 +19,7 @@ import java.util.Map;
  */
 public class MonoT5Scorer {
 
-  private static final String SERVICE_URL = "http://127.0.0.1:5000/eval";
+  private static final String SERVICE_URL = "http://localhost:5000/eval";
   private static final ObjectMapper objectMapper = new ObjectMapper();
 
   /**
@@ -85,16 +85,10 @@ public class MonoT5Scorer {
     }
   }
 
-  /**
-   * Convenience method: returns only boolean relevance
-   */
-  public static boolean isRelevant(String query, String document) {
-    return evaluate(query, document).isRelevant;
-  }
 
   private static MonoT5Result parseResponse(String json) {
     try {
-      Map<String, Object> response = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {
+      Map<String, Object> response = objectMapper.readValue(json, new TypeReference<>() {
       });
 
       String prediction = (String) response.getOrDefault("prediction", "false");

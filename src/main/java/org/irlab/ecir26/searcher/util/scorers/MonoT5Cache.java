@@ -1,4 +1,4 @@
-package org.irlab.prfllm.searcher.util.scorers;
+package org.irlab.ecir26.searcher.util.scorers;
 
 import java.io.*;
 import java.util.HashMap;
@@ -73,13 +73,6 @@ public class MonoT5Cache implements LLMCache {
     cache.put(cacheKey, result);
 
     return result;
-  }
-
-  /**
-   * Returns the number of entries in the cache.
-   */
-  public int size() {
-    return cache.size();
   }
 
   /**

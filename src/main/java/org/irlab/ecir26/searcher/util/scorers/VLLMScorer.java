@@ -1,4 +1,4 @@
-package org.irlab.prfllm.searcher.util.scorers;
+package org.irlab.ecir26.searcher.util.scorers;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -13,13 +13,13 @@ import java.net.URL;
 import java.util.Map;
 
 /**
- * Helper to call the VLLM service running on orome:8080
- * Expects the service at POST /probabilidad with JSON {"prompt":...}
+ * Helper to call the VLLM service running on localhost:8080
+ * Expects the service at POST /prob with JSON {"prompt":...}
  * and a JSON response containing {"p_true":..., "p_false":...}
  */
 public class VLLMScorer {
 
-  private static final String SERVICE_URL = "http://namo:8080/probabilidad";
+  private static final String SERVICE_URL = "http://localhost:8080/prob";
   private static final ObjectMapper objectMapper = new ObjectMapper();
 
   /**
@@ -109,7 +109,7 @@ public class VLLMScorer {
    */
   private static VLLMResult parseResponse(String json) {
     try {
-      Map<String, Object> response = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {
+      Map<String, Object> response = objectMapper.readValue(json, new TypeReference<>() {
       });
 
       double probTrue = getDoubleValue(response, "p_true");

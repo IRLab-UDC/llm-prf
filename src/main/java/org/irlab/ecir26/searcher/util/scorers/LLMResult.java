@@ -1,4 +1,4 @@
-package org.irlab.prfllm.searcher.util.scorers;
+package org.irlab.ecir26.searcher.util.scorers;
 
 /**
  * Common result class for LLM-based relevance judgments.
