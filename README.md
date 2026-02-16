@@ -65,6 +65,5 @@ Default parameter ranges (configurable in `dataset_config.sh`):
 The system uses collection-specific caches to avoid redundant LLM queries:
 - MonoT5 cache: `{cache_dir}/t5_cache.tsv`
 - VLLM cache: `{cache_dir}/vllm_cache.tsv`
-- Ollama cache: `{cache_dir}/ollama_cache_{model}.tsv`
 
 Caches are automatically loaded and saved across runs.
