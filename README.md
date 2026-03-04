@@ -2,7 +2,7 @@
 
 This repo holds the code to reproduce the experiments of the following paper:
 
-#### LLM-Assisted Pseudo-Relevance Feedback @ ECIR '26 ([Link](https://arxiv.org/abs/2601.11238))
+#### LLM-Assisted Pseudo-Relevance Feedback @ ECIR '26 ([Arxiv](https://arxiv.org/abs/2601.11238))
 
 This code will only run grid search on training collections.
 
