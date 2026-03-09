@@ -17,11 +17,4 @@ public abstract class AbstractRelevanceFeedback implements RelevanceFeedback {
   }
 
   protected abstract TermWeights estimateWeights(Map<Integer, Double> relevanceSet);
-
-  protected abstract String getName();
-
-  @Override
-  public String toString() {
-    return getName();
-  }
 }

@@ -7,5 +7,6 @@ import java.util.Map;
 public interface RelevanceFeedback {
 
   TermWeights getTermWeights(final Map<Integer, Double> relevanceSet);
+
 }
 
