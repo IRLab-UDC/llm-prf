@@ -1,4 +1,4 @@
-package org.irlab.ecir26.searcher.util.scorers;
+package org.irlab.prfllm.searcher.util.scorers;
 
 import java.io.*;
 import java.util.HashMap;

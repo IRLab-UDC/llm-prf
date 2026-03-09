@@ -1,4 +1,4 @@
-package org.irlab.ecir26.searcher.smoothing;
+package org.irlab.prfllm.searcher.smoothing;
 
 import java.util.Set;
 

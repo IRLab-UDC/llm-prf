@@ -1,6 +1,6 @@
-package org.irlab.ecir26.searcher.smoothing;
+package org.irlab.prfllm.searcher.smoothing;
 
-import org.irlab.ecir26.searcher.util.StatsProvider;
+import org.irlab.prfllm.searcher.util.StatsProvider;
 
 import java.util.concurrent.ConcurrentHashMap;
 

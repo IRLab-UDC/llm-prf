@@ -1,4 +1,4 @@
-package org.irlab.ecir26.searcher.util;
+package org.irlab.prfllm.searcher.util;
 
 import java.io.BufferedReader;
 import java.io.FileReader;

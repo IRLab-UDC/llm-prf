@@ -4,7 +4,7 @@
 # This file contains dataset paths and configuration that can be sourced by other scripts
 
 # Base folder configuration
-FOLDER="/path/base/folder/"
+FOLDER="/home/david/ecir26/"
 
 # Dataset definitions (array format: index_name topics_file qrels_file)
 declare -a AP8889=("ap8889" "topics.51-100" "qrels.AP8889.51-100" "topics.101-200" "qrels_ap8889_101_200.txt")

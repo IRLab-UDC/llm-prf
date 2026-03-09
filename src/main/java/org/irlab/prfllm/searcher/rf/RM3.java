@@ -1,9 +1,9 @@
-package org.irlab.ecir26.searcher.rf;
+package org.irlab.prfllm.searcher.rf;
 
 
 import org.apache.commons.lang3.mutable.MutableDouble;
-import org.irlab.ecir26.searcher.smoothing.Smoothing;
-import org.irlab.ecir26.searcher.util.TermWeights;
+import org.irlab.prfllm.searcher.smoothing.Smoothing;
+import org.irlab.prfllm.searcher.util.TermWeights;
 
 import java.util.HashSet;
 import java.util.Map;

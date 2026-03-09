@@ -1,4 +1,4 @@
-package org.irlab.ecir26.searcher.util.scorers;
+package org.irlab.prfllm.searcher.util.scorers;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;

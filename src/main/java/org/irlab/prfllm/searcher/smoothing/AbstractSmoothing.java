@@ -1,11 +1,11 @@
-package org.irlab.ecir26.searcher.smoothing;
+package org.irlab.prfllm.searcher.smoothing;
 
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.util.BytesRef;
-import org.irlab.ecir26.searcher.util.StatsProvider;
+import org.irlab.prfllm.searcher.util.StatsProvider;
 
 import java.io.IOException;
 import java.util.Set;

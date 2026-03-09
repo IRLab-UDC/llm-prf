@@ -1,4 +1,4 @@
-package org.irlab.ecir26.searcher;
+package org.irlab.prfllm.searcher;
 
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
@@ -16,18 +16,18 @@ import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.similarities.LMDirichletSimilarity;
 import org.apache.lucene.store.FSDirectory;
-import org.irlab.ecir26.searcher.rf.RM3;
-import org.irlab.ecir26.searcher.rf.RelevanceFeedback;
-import org.irlab.ecir26.searcher.smoothing.AdditiveSmoothing;
-import org.irlab.ecir26.searcher.smoothing.Smoothing;
-import org.irlab.ecir26.searcher.util.StatsProvider;
-import org.irlab.ecir26.searcher.util.TRECUtils;
-import org.irlab.ecir26.searcher.util.TRECUtils.Topic;
-import org.irlab.ecir26.searcher.util.TermWeights;
-import org.irlab.ecir26.searcher.util.scorers.LLMCache;
-import org.irlab.ecir26.searcher.util.scorers.LLMResult;
-import org.irlab.ecir26.searcher.util.scorers.MonoT5Cache;
-import org.irlab.ecir26.searcher.util.scorers.VLLMCache;
+import org.irlab.prfllm.searcher.rf.RM3;
+import org.irlab.prfllm.searcher.rf.RelevanceFeedback;
+import org.irlab.prfllm.searcher.smoothing.AdditiveSmoothing;
+import org.irlab.prfllm.searcher.smoothing.Smoothing;
+import org.irlab.prfllm.searcher.util.StatsProvider;
+import org.irlab.prfllm.searcher.util.TRECUtils;
+import org.irlab.prfllm.searcher.util.TRECUtils.Topic;
+import org.irlab.prfllm.searcher.util.TermWeights;
+import org.irlab.prfllm.searcher.util.scorers.LLMCache;
+import org.irlab.prfllm.searcher.util.scorers.LLMResult;
+import org.irlab.prfllm.searcher.util.scorers.MonoT5Cache;
+import org.irlab.prfllm.searcher.util.scorers.VLLMCache;
 
 import java.io.*;
 import java.nio.file.Paths;

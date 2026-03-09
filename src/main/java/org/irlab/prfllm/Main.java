@@ -1,7 +1,7 @@
-package org.irlab.ecir26;
+package org.irlab.prfllm;
 
-import org.irlab.ecir26.indexer.TRECIndexerLuceneRM;
-import org.irlab.ecir26.searcher.TRECSearcherLucene;
+import org.irlab.prfllm.indexer.TRECIndexerLuceneRM;
+import org.irlab.prfllm.searcher.TRECSearcherLucene;
 
 public class Main {
 

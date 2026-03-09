@@ -5,9 +5,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <groupId>org.irlab</groupId>
-    <artifactId>ecir26</artifactId>
+    <artifactId>prfllm</artifactId>
     <version>1.0</version>
-    <name>ecir26</name>
+    <name>prfllm</name>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>21</maven.compiler.source>
@@ -92,7 +92,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>org.irlab.ecir26.Main</mainClass>
+                            <mainClass>org.irlab.prfllm.Main</mainClass>
                         </manifest>
                     </archive>
                     <descriptorRefs>

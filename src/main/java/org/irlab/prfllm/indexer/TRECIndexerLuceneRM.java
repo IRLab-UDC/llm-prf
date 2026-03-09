@@ -1,4 +1,4 @@
-package org.irlab.ecir26.indexer;
+package org.irlab.prfllm.indexer;
 
 import com.google.gson.Gson;
 import org.apache.lucene.analysis.Analyzer;

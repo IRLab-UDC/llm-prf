@@ -3,9 +3,9 @@
 set -e
 
 # Configuration
-REMOTE_USER="root"
+REMOTE_USER="david"
 REMOTE_HOST="aule"
-REMOTE_BASE_DIR="/home/javier/prf-llm"
+REMOTE_BASE_DIR="/home/david/ecir26"
 REMOTE_SCRIPTS_DIR="${REMOTE_BASE_DIR}/scripts"
 REMOTE_PYTHON_DIR="${REMOTE_BASE_DIR}/python"
 
@@ -20,16 +20,7 @@ echo ""
 echo "==> Copying scripts to ${REMOTE_SCRIPTS_DIR}"
 scp "${SCRIPTS_DIR}/run_grid_search.sh" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_SCRIPTS_DIR}/"
 scp "${SCRIPTS_DIR}/dataset_config.sh" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_SCRIPTS_DIR}/"
-scp "${SCRIPTS_DIR}/analyze_grid_results.sh" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_SCRIPTS_DIR}/"
 echo "✓ Scripts copied successfully"
-
-# Step 1b: Copy visualize_grid_results.py to remote python directory
-echo "==> Copying visualize_grid_results.py to ${REMOTE_PYTHON_DIR}"
-ssh "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p \"${REMOTE_PYTHON_DIR}\""
-scp "${PROJECT_ROOT}/src/main/python/visualize_grid_results.py" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PYTHON_DIR}/"
-echo "✓ Python visualization script copied successfully"
-echo ""
-echo ""
 
 # Step 2: Build the project with Maven
 echo "==> Building project with Maven (package)"
@@ -39,7 +30,7 @@ echo "✓ Maven build completed successfully"
 echo ""
 
 # Step 3: Copy JAR with dependencies to remote server
-JAR_FILE="${PROJECT_ROOT}/target/prf-llm-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
+JAR_FILE="${PROJECT_ROOT}/target/ecir26-1.0-jar-with-dependencies.jar"
 if [ ! -f "${JAR_FILE}" ]; then
     echo "ERROR: JAR file not found at ${JAR_FILE}"
     exit 1
@@ -53,4 +44,4 @@ echo ""
 echo "==> Deployment completed successfully!"
 echo "Remote locations:"
 echo "  - Scripts: ${REMOTE_SCRIPTS_DIR}/"
-echo "  - JAR: ${REMOTE_BASE_DIR}/prf-llm-0.0.1-SNAPSHOT-jar-with-dependencies.jar"
+echo "  - JAR: ${REMOTE_BASE_DIR}/ecir26-1.0-jar-with-dependencies.jar"

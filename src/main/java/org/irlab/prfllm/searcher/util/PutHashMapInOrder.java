@@ -1,4 +1,4 @@
-package org.irlab.ecir26.searcher.util;
+package org.irlab.prfllm.searcher.util;
 
 import java.util.*;
 import java.util.Map.Entry;
