@@ -8,4 +8,7 @@ public interface Smoothing {
 
   Set<String> getDocTerms(int doc);
 
+  double computeBackgroundProb(String term);
+
+  boolean termExists(String term);
 }

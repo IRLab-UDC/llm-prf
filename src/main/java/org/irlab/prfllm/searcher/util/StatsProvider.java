@@ -16,10 +16,9 @@ public final class StatsProvider {
   private final ConcurrentHashMap<String, Long> cacheLexiconSize;
   private final ConcurrentHashMap<Pair<Integer, String>, Terms> cacheTermVector;
   private final ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> cacheDocTerm;
-  private TermVectors termvectors;
+  private final TermVectors termvectors;
 
   public StatsProvider(IndexReader reader) {
-
     this.reader = reader;
     try {
       this.termvectors = reader.termVectors();
@@ -36,11 +35,9 @@ public final class StatsProvider {
   public int getTermFrequency(String term, int doc, String field) {
 
     try {
-
       final BytesRef termBytes = new Term(field, term).bytes();
 
       if (cacheDocTerm.containsKey(doc)) {
-
         ConcurrentHashMap<String, Integer> cachedBytesRef = cacheDocTerm.get(doc);
 
         if (cachedBytesRef.containsKey(termBytes.utf8ToString())) {
@@ -50,7 +47,6 @@ public final class StatsProvider {
         }
 
       } else {
-
         Terms termVector;
         Pair<Integer, String> key = Pair.of(doc, field);
         ConcurrentHashMap<String, Integer> cachedBytesRef = new ConcurrentHashMap<>();
@@ -63,7 +59,6 @@ public final class StatsProvider {
         }
 
         if (termVector == null) {
-
           return 0;
         }
 
@@ -75,6 +70,7 @@ public final class StatsProvider {
           termPosting.nextDoc();
           cachedBytesRef.put(otherTermBytes.utf8ToString(), termPosting.freq());
         }
+
         cacheDocTerm.put(doc, cachedBytesRef);
 
         if (cachedBytesRef.containsKey(termBytes.utf8ToString())) {
@@ -85,46 +81,21 @@ public final class StatsProvider {
       }
 
     } catch (final IOException e) {
-
       LOG.error(e.getMessage());
       return 0;
     }
-
   }
 
   public long getDocTokensSize(int doc, String field) {
-
     try {
-
       Terms termVector = getTermVector(doc, field);
 
       if (termVector == null) {
-
         return 0;
       }
 
       return termVector.getSumTotalTermFreq();
     } catch (final IOException e) {
-
-      LOG.error(e.getMessage());
-      throw new RuntimeException(e);
-    }
-  }
-
-  public long getDocTermSize(int doc, String field) {
-
-    try {
-
-      Terms termVector = getTermVector(doc, field);
-
-      if (termVector == null) {
-
-        return 0;
-      }
-
-      return termVector.size();
-    } catch (final IOException e) {
-
       LOG.error(e.getMessage());
       throw new RuntimeException(e);
     }
@@ -132,24 +103,18 @@ public final class StatsProvider {
 
 
   public long getTotalTermFrequency(String term, String field) {
-
     try {
-
       return reader.totalTermFreq(new Term(field, term));
     } catch (IOException e) {
-
       LOG.error(e.getMessage());
       throw new RuntimeException(e);
     }
   }
 
   public long getCollectionTokensSize(String field) {
-
     try {
-
       return reader.getSumTotalTermFreq(field);
     } catch (IOException e) {
-
       LOG.error(e.getMessage());
       throw new RuntimeException(e);
     }
@@ -157,9 +122,7 @@ public final class StatsProvider {
 
 
   public long getCollectionLexiconSize(String field) {
-
     if (cacheLexiconSize.containsKey(field)) {
-
       return cacheLexiconSize.get(field);
     }
 
@@ -168,7 +131,6 @@ public final class StatsProvider {
       long termsCount = lexicon.size();
 
       if (termsCount != -1) {
-
         cacheLexiconSize.put(field, termsCount);
         return termsCount;
       }
@@ -177,12 +139,12 @@ public final class StatsProvider {
       TermsEnum termsEnum = lexicon.iterator();
 
       while (termsEnum.next() != null) {
-
         termsCount = termsCount + 1;
       }
 
       cacheLexiconSize.put(field, termsCount);
       return termsCount;
+
     } catch (IOException e) {
 
       LOG.error(e.getMessage());
@@ -191,16 +153,11 @@ public final class StatsProvider {
   }
 
   public Terms getTermVector(int doc, String field) {
-
     try {
-
       return termvectors.get(doc, field);
     } catch (final IOException e) {
-
       LOG.error(e.getMessage());
       throw new RuntimeException(e);
     }
   }
-
-
 }

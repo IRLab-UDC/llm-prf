@@ -18,25 +18,25 @@ public abstract class AbstractSmoothing implements Smoothing {
   protected final StatsProvider statsProvider;
   private final ConcurrentHashMap<Pair<String, Integer>, Double> cacheSmoothed;
   private final ConcurrentHashMap<Integer, Set<String>> cacheTerms;
+  private final ConcurrentHashMap<String, Double> cacheBackground;
+
 
   public AbstractSmoothing(double smoothingParameter, String docField, StatsProvider statsProvider) {
-
     this.smoothingParameter = smoothingParameter;
     this.docField = docField;
     this.statsProvider = statsProvider;
     this.cacheSmoothed = new ConcurrentHashMap<>();
     this.cacheTerms = new ConcurrentHashMap<>();
+    this.cacheBackground = new ConcurrentHashMap<>();
   }
 
   protected abstract double computeValue(String term, int doc);
 
   @Override
   public double computeSmoothedProb(String term, int doc) {
-
     Pair<String, Integer> key = Pair.of(term, doc);
 
     if (cacheSmoothed.containsKey(key)) {
-
       return cacheSmoothed.get(key);
     }
 
@@ -49,9 +49,7 @@ public abstract class AbstractSmoothing implements Smoothing {
 
   @Override
   public Set<String> getDocTerms(int doc) {
-
     if (cacheTerms.containsKey(doc)) {
-
       return cacheTerms.get(doc);
     }
 
@@ -59,22 +57,19 @@ public abstract class AbstractSmoothing implements Smoothing {
     Terms terms = statsProvider.getTermVector(doc, docField);
 
     if (terms == null) {
-
       return docTerms;
     }
 
     try {
-
       TermsEnum termsEnum = terms.iterator();
       BytesRef text;
 
       while ((text = termsEnum.next()) != null) {
-
         String term = text.utf8ToString();
         docTerms.add(term);
       }
-    } catch (final IOException e) {
 
+    } catch (final IOException e) {
       throw new RuntimeException(e);
     }
 
@@ -82,11 +77,21 @@ public abstract class AbstractSmoothing implements Smoothing {
     return docTerms;
   }
 
-  protected abstract String getName();
+  @Override
+  public double computeBackgroundProb(String term) {
+    if (cacheBackground.containsKey(term)) {
+      return cacheBackground.get(term);
+    }
+    final long termTotalFrequency = statsProvider.getTotalTermFrequency(term, docField);
+    final long collectionLength = statsProvider.getCollectionTokensSize(docField);
+    double value = (double) termTotalFrequency / collectionLength;
+    cacheBackground.put(term, value);
+    return value;
+  }
 
   @Override
-  public String toString() {
-
-    return getName();
+  public boolean termExists(String term) {
+    long ttf = statsProvider.getTotalTermFrequency(term, docField);
+    return ttf > 0;
   }
 }

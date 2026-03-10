@@ -18,12 +18,9 @@ public final class AdditiveSmoothing extends AbstractSmoothing {
 
   @Override
   public double computeValue(String term, int doc) {
-
-
     final int termFreq = statsProvider.getTermFrequency(term, doc, docField);
     long docLength;
     long lexiconSize;
-
 
     if (cacheDocLength.containsKey(doc)) {
       docLength = cacheDocLength.get(doc);
@@ -40,11 +37,5 @@ public final class AdditiveSmoothing extends AbstractSmoothing {
     }
 
     return (termFreq + smoothingParameter) / (docLength + smoothingParameter * lexiconSize);
-  }
-
-  @Override
-  protected String getName() {
-
-    return String.format("Additive-gamma-%1.2f", smoothingParameter);
   }
 }

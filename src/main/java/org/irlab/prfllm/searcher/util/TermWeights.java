@@ -82,6 +82,10 @@ public final class TermWeights {
     return this;
   }
 
+  public void setTermWeight(String term, double weight) {
+    weights.put(term, weight);
+  }
+
   @Override
   public String toString() {
     StringBuilder string = new StringBuilder();

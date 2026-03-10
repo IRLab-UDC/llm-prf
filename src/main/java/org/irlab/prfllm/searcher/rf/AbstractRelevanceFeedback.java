@@ -1,20 +1,27 @@
 package org.irlab.prfllm.searcher.rf;
 
 import org.irlab.prfllm.searcher.smoothing.Smoothing;
-import org.irlab.prfllm.searcher.util.TermWeights;
 
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 public abstract class AbstractRelevanceFeedback implements RelevanceFeedback {
 
   protected final String docField;
-  protected final Smoothing documentSmoothing;
+  protected final Smoothing smoothing;
 
-  public AbstractRelevanceFeedback(String docField, Smoothing documentSmoothing) {
-
+  public AbstractRelevanceFeedback(String docField, Smoothing smoothing) {
     this.docField = docField;
-    this.documentSmoothing = documentSmoothing;
+    this.smoothing = smoothing;
   }
 
-  protected abstract TermWeights estimateWeights(Map<Integer, Double> relevanceSet);
+  protected Set<String> getVocab(Map<Integer, Double> relevanceSet) {
+    final Set<String> vocab = new HashSet<>();
+    relevanceSet.forEach((doc, ql) -> {
+      final Set<String> docTerms = smoothing.getDocTerms(doc);
+      vocab.addAll(docTerms);
+    });
+    return vocab;
+  }
 }
