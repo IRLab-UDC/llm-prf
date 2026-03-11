@@ -44,6 +44,8 @@ for arg in "$@"; do
     esac
 done
 
+mkdir -p "$RUN_FOLDER"
+
 # Show current configuration
 show_config
 
