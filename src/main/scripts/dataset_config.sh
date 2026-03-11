@@ -10,7 +10,7 @@ FOLDER="/home/david/llm-prf/"
 declare -a AP8889=("ap8889" "topics.51-100" "qrels.AP8889.51-100" "topics.101-200" "qrels_ap8889_101_200.txt")
 declare -a ROBUST04=("robust04" "topics.301-350.trec.txt" "qrels.robust04.300-450.601-700.trec.txt" "topics.351-400.trec.txt" "qrels.robust04.300-450.601-700.trec.txt")
 declare -a DL19=("msmarco" "topics.dl-19.trec" "qrels.dl19-passage.nist.trec.txt" "topics.dl-20.trec" "qrels.dl20-passage.nist.trec.txt")
-declare -a WT10G=("wt10g" "topics.451-500.trec.txt" "qrels.trec9.main_web" "topics.501-550" "qrels.wt10g.501-550")
+declare -a WT10G=("wt10g" "topics.451-500.trec.txt" "qrels.trec9.main_web.451-500" "topics.501-550" "qrels.wt10g.501-550")
 # Select active dataset (change this to switch datasets)
 # Options: DATASET=("${AP8889[@]}") or DATASET=("${ROBUST04[@]}")
 DATASET=("${AP8889[@]}")  # Currently set to AP8889
