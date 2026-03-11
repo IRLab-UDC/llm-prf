@@ -5,3 +5,6 @@ tiktoken
 sentencepiece
 protobuf
 vllm
+pandas
+seaborn
+matplotlib
