@@ -1,4 +1,4 @@
-package org.irlab.prfllm.searcher.util.scorers;
+package org.irlab.llmprf.searcher.util.scorers;
 
 import java.io.IOException;
 

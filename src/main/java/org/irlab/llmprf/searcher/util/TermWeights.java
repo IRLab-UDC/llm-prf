@@ -1,4 +1,4 @@
-package org.irlab.prfllm.searcher.util;
+package org.irlab.llmprf.searcher.util;
 
 import it.unimi.dsi.fastutil.objects.Object2DoubleMap;
 import it.unimi.dsi.fastutil.objects.Object2DoubleOpenHashMap;

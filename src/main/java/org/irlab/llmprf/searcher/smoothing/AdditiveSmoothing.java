@@ -1,6 +1,6 @@
-package org.irlab.prfllm.searcher.smoothing;
+package org.irlab.llmprf.searcher.smoothing;
 
-import org.irlab.prfllm.searcher.util.StatsProvider;
+import org.irlab.llmprf.searcher.util.StatsProvider;
 
 import java.util.concurrent.ConcurrentHashMap;
 

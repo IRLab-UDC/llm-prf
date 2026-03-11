@@ -4,7 +4,7 @@
 # This file contains dataset paths and configuration that can be sourced by other scripts
 
 # Base folder configuration
-FOLDER="/home/david/ecir26/"
+FOLDER="/home/david/llm-prf/"
 
 # Dataset definitions (array format: index_name topics_file qrels_file)
 declare -a AP8889=("ap8889" "topics.51-100" "qrels.AP8889.51-100" "topics.101-200" "qrels_ap8889_101_200.txt")
@@ -23,7 +23,7 @@ TOPICS_TEST="${DATASET[3]}"
 QRELS_TEST="${DATASET[4]}"
 
 # Construct full paths
-INDEX_PATH="${FOLDER}/indexes/${INDEX}"
+INDEX_PATH="${FOLDER}/indices/${INDEX}"
 TOPICS_PATH="${FOLDER}/topics/${TOPICS}"
 QRELS_PATH="${FOLDER}/qrels/${QRELS}"
 RUN_FOLDER="${FOLDER}/runs/${INDEX}"
@@ -40,18 +40,16 @@ NC='\033[0m' # No Color
 # Grid search parameters (used by run_grid_search.sh)
 DEPTHS=(100 5 10 25 50 75)
 E_VALUES=(5 10 15 20 25 30)
-RF_STRATEGY_VALUES=("PRF" "MONOT5" "MONOT5-PROB" "VLLM" "VLLM-PROB" "ORACLE" "ORACLE-K")
+RF_STRATEGY_VALUES=("PRF" "MONOT5" "MONOT5-PROB" "ORACLE" "ORACLE-K")
+RF_MODEL_VALUES=("RM3" "DMM" "MEDMM")
 LAMBDA_VALUES=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
 
 # Model parameters
-MU=2000
+DEFAULT_BASELINE_MODEL="LMDirichlet"  # Default baseline for PRF experiments
 SEARCH_BY="content"
-RF_MODEL="RM3"
-PRF_SMOOTHING="Additive"
-PRF_SMOOTHING_PARAM=0.1
 
 # JAR path (relative to scripts directory)
-JAR_PATH="../ecir26-1.0-jar-with-dependencies.jar"
+JAR_PATH="../llmprf-1.0-jar-with-dependencies.jar"
 
 # Function to switch dataset
 switch_dataset() {
@@ -81,7 +79,7 @@ switch_dataset() {
     QRELS="${DATASET[2]}"
     TOPICS_TEST="${DATASET[3]}"
     QRELS_TEST="${DATASET[4]}"
-    INDEX_PATH="${FOLDER}/indexes/${INDEX}"
+    INDEX_PATH="${FOLDER}/indices/${INDEX}"
     TOPICS_PATH="${FOLDER}/topics/${TOPICS}"
     QRELS_PATH="${FOLDER}/qrels/${QRELS}"
     TOPICS_TEST_PATH="${FOLDER}/topics/${TOPICS_TEST}"

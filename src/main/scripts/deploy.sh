@@ -5,7 +5,7 @@ set -e
 # Configuration
 REMOTE_USER="david"
 REMOTE_HOST="aule"
-REMOTE_BASE_DIR="/home/david/ecir26"
+REMOTE_BASE_DIR="/home/david/llm-prf"
 REMOTE_SCRIPTS_DIR="${REMOTE_BASE_DIR}/scripts"
 REMOTE_PYTHON_DIR="${REMOTE_BASE_DIR}/python"
 
@@ -18,6 +18,7 @@ echo ""
 
 # Step 1: Copy scripts to remote server
 echo "==> Copying scripts to ${REMOTE_SCRIPTS_DIR}"
+ssh "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p ${REMOTE_SCRIPTS_DIR}/"
 scp "${SCRIPTS_DIR}/run_grid_search.sh" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_SCRIPTS_DIR}/"
 scp "${SCRIPTS_DIR}/dataset_config.sh" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_SCRIPTS_DIR}/"
 echo "✓ Scripts copied successfully"
@@ -30,7 +31,7 @@ echo "✓ Maven build completed successfully"
 echo ""
 
 # Step 3: Copy JAR with dependencies to remote server
-JAR_FILE="${PROJECT_ROOT}/target/ecir26-1.0-jar-with-dependencies.jar"
+JAR_FILE="${PROJECT_ROOT}/target/llmprf-1.0-jar-with-dependencies.jar"
 if [ ! -f "${JAR_FILE}" ]; then
     echo "ERROR: JAR file not found at ${JAR_FILE}"
     exit 1

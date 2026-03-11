@@ -1,6 +1,6 @@
-package org.irlab.prfllm.searcher.rf;
+package org.irlab.llmprf.searcher.rf;
 
-import org.irlab.prfllm.searcher.smoothing.Smoothing;
+import org.irlab.llmprf.searcher.smoothing.Smoothing;
 
 import java.util.HashSet;
 import java.util.Map;

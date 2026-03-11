@@ -1,4 +1,4 @@
-package org.irlab.prfllm.searcher.util.scorers;
+package org.irlab.llmprf.searcher.util.scorers;
 
 import java.io.*;
 import java.util.HashMap;
@@ -15,9 +15,9 @@ public class VLLMCache implements LLMCache {
   private Map<String, LLMResult> cache;
   private BufferedWriter cacheWriter;
 
-  public VLLMCache(String cacheDirectory, String queryType) throws IOException {
+  public VLLMCache(String cacheDirectory) throws IOException {
     this.cacheDir = cacheDirectory;
-    this.cacheFile = cacheDir + "/vllm_cache_" + queryType + ".tsv";
+    this.cacheFile = cacheDir + "/vllm_cache.tsv";
 
     new File(cacheDir).mkdirs();
     this.cache = new HashMap<>();

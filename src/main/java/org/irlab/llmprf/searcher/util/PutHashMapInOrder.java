@@ -1,4 +1,4 @@
-package org.irlab.prfllm.searcher.util;
+package org.irlab.llmprf.searcher.util;
 
 import java.util.*;
 import java.util.Map.Entry;

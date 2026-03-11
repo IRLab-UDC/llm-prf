@@ -1,7 +1,7 @@
-package org.irlab.prfllm;
+package org.irlab.llmprf;
 
-import org.irlab.prfllm.indexer.TRECIndexerLuceneRM;
-import org.irlab.prfllm.searcher.TRECSearcherLucene;
+import org.irlab.llmprf.indexer.TRECIndexerLuceneRM;
+import org.irlab.llmprf.searcher.TRECSearcherLucene;
 
 public class Main {
 

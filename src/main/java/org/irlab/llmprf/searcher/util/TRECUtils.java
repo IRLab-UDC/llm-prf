@@ -1,4 +1,4 @@
-package org.irlab.prfllm.searcher.util;
+package org.irlab.llmprf.searcher.util;
 
 import java.io.BufferedReader;
 import java.io.FileReader;

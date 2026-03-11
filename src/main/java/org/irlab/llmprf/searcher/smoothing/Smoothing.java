@@ -1,4 +1,4 @@
-package org.irlab.prfllm.searcher.smoothing;
+package org.irlab.llmprf.searcher.smoothing;
 
 import java.util.Set;
 

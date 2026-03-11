@@ -1,10 +1,10 @@
-package org.irlab.prfllm.searcher.rf;
+package org.irlab.llmprf.searcher.rf;
 
 import it.unimi.dsi.fastutil.ints.Int2DoubleMap;
 import it.unimi.dsi.fastutil.ints.Int2DoubleOpenHashMap;
 import org.apache.commons.lang3.mutable.MutableDouble;
-import org.irlab.prfllm.searcher.smoothing.Smoothing;
-import org.irlab.prfllm.searcher.util.TermWeights;
+import org.irlab.llmprf.searcher.smoothing.Smoothing;
+import org.irlab.llmprf.searcher.util.TermWeights;
 
 import java.util.List;
 import java.util.Map;
