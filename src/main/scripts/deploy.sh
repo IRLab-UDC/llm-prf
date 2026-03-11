@@ -21,7 +21,16 @@ echo "==> Copying scripts to ${REMOTE_SCRIPTS_DIR}"
 ssh "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p ${REMOTE_SCRIPTS_DIR}/"
 scp "${SCRIPTS_DIR}/run_grid_search.sh" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_SCRIPTS_DIR}/"
 scp "${SCRIPTS_DIR}/dataset_config.sh" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_SCRIPTS_DIR}/"
+scp "${SCRIPTS_DIR}/evaluate_grid_results.sh" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_SCRIPTS_DIR}/"
 echo "✓ Scripts copied successfully"
+
+echo "==> Copying visualize_grid_results.py to ${REMOTE_PYTHON_DIR}"
+ssh "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p \"${REMOTE_PYTHON_DIR}\""
+scp "${PROJECT_ROOT}/src/main/python/visualize_grid_results.py" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PYTHON_DIR}/"
+echo "✓ Python visualization script copied successfully"
+echo ""
+echo ""
+
 
 # Step 2: Build the project with Maven
 echo "==> Building project with Maven (package)"
