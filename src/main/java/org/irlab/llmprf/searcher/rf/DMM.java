@@ -19,27 +19,49 @@ public class DMM extends AbstractRelevanceFeedback {
 
   @Override
   public TermWeights getTermWeights(final Map<Integer, Double> relevanceSet, final List<String> queryTerms) {
-    final int relevanceSetSize = relevanceSet.size();
+    return getTermWeights(relevanceSet, queryTerms, null);
+  }
 
-    // Get all vocab from docs in the relevance set.
-    Set<String> vocab = getVocab(relevanceSet);
+  @Override
+  public TermWeights getTermWeights(final Map<Integer, Double> relevanceSet, final List<String> queryTerms,
+                                    final Map<Integer, Set<String>> allowedTerms) {
+    final int relevanceSetSize = relevanceSet.size();
+    Set<String> vocab = getVocab(relevanceSet, allowedTerms);
 
     TermWeights vocabWeights = new TermWeights();
 
-    // For each term in the vocabulary, compute its weight.
     for (String term : vocab) {
       final MutableDouble sum = new MutableDouble(0);
+      relevanceSet.forEach((doc, ql) -> sum.add(Math.log(smoothing.computeSmoothedProb(term, doc))));
 
-      // Sum log probabilities across relevant documents
+      final double backgroundProbLog = Math.log(smoothing.computeBackgroundProb(term));
+      final double pwf = ((sum.doubleValue() / relevanceSetSize) - (lambda * backgroundProbLog)) / (1 - lambda);
+
+      vocabWeights.setTermWeight(term, Math.exp(pwf));
+    }
+
+    return vocabWeights;
+  }
+
+  @Override
+  public TermWeights getTermWeightsFromSpans(final Map<Integer, Double> relevanceSet, final List<String> queryTerms,
+                                              final Map<Integer, Map<String, Integer>> spanTermFreqs) {
+    final int relevanceSetSize = relevanceSet.size();
+    Set<String> vocab = getVocabFromSpans(relevanceSet, spanTermFreqs);
+    Map<Integer, Long> spanLen = spanLengths(spanTermFreqs);
+
+    TermWeights vocabWeights = new TermWeights();
+
+    for (String term : vocab) {
+      final MutableDouble sum = new MutableDouble(0);
       relevanceSet.forEach((doc, ql) -> {
-        double docProb = smoothing.computeSmoothedProb(term, doc);
-        sum.add(Math.log(docProb));
+        Map<String, Integer> tf = spanTermFreqs.get(doc);
+        int stf = (tf != null) ? tf.getOrDefault(term, 0) : 0;
+        long slen = spanLen.getOrDefault(doc, 1L);
+        sum.add(Math.log(smoothing.computeSpanSmoothedProb(term, stf, slen)));
       });
 
-      // Compute background probability
       final double backgroundProbLog = Math.log(smoothing.computeBackgroundProb(term));
-
-      // DMM formula: ((sum / |R|) - (lambda * log P(t|C))) / (1 - lambda)
       final double pwf = ((sum.doubleValue() / relevanceSetSize) - (lambda * backgroundProbLog)) / (1 - lambda);
 
       vocabWeights.setTermWeight(term, Math.exp(pwf));

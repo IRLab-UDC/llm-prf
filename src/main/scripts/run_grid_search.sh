@@ -1,25 +1,12 @@
 #!/bin/bash
 
-# Grid search script for PRF with LLM strategies
-# This script runs experiments with:
-# 1. Baselines: LMDirichlet (mu=2000) and BM25 (k1=1.2, b=0.75)
-# 2. MonoT5 Reranker 
-# 3. PRF with different combinations of:
-#    - depth: 5, 10, 25, 50, 75, 100
-#    - e (expansion terms): 5, 10, 15, 20, 25, 30
-#    - lambda (interpolation): 0.1 to 0.9 in steps of 0.1
-#    - RF models: RM3, DMM, MEDMM
-#    - RF strategies: PRF, VLLM, VLLM-PROB, MONOT5, MONOT5-PROB, ORACLE, ORACLE-K
-
 set -e
 
-# Source shared dataset configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/dataset_config.sh"
 
-# Parse command line arguments
 SKIP_RERANK=false
-BASELINE_MODELS=("LMDirichlet" "BM25")  # Default: run both baselines
+BASELINE_MODELS=("LMDirichlet" "BM25")
 
 for arg in "$@"; do
     case $arg in
@@ -46,23 +33,19 @@ done
 
 mkdir -p "$RUN_FOLDER"
 
-# Show current configuration
 show_config
 
-# Validate paths
 if ! validate_paths; then
     echo -e "${RED}Configuration validation failed. Please check paths.${NC}"
     exit 1
 fi
 
-# Check if JAR exists
 if [ ! -f "$JAR_PATH" ]; then
     echo -e "${RED}Error: JAR file not found at $JAR_PATH${NC}"
     echo "Please run: mvn package"
     exit 1
 fi
 
-# Check if MonoT5 service is running (only if not skipping rerank)
 if [ "$SKIP_RERANK" = false ]; then
     if ! curl -s http://localhost:5000/health > /dev/null 2>&1; then
         echo -e "${YELLOW}Warning: MonoT5 service might not be running at http://127.0.0.1:5000${NC}"
@@ -75,18 +58,54 @@ if [ "$SKIP_RERANK" = false ]; then
     fi
 fi
 
-# Calculate total experiments
+NEEDS_VLLM=false
+for combo in "${RF_STRATEGY_TERMFILTER_COMBOS[@]}"; do
+    strategy="${combo%%:*}"
+    tf="${combo##*:}"
+    if [[ "$strategy" == VLLM* || "$tf" == vllm* ]]; then NEEDS_VLLM=true; break; fi
+done
+
+if [ "$NEEDS_VLLM" = true ]; then
+    VLLM_HOST="${VLLM_HOST:-localhost:8080}"
+    if ! curl -s "http://${VLLM_HOST}/health" > /dev/null 2>&1; then
+        echo -e "${YELLOW}Warning: VLLM service might not be running at http://${VLLM_HOST}${NC}"
+        echo "Start it with: python src/main/python/serve_vllm.py"
+        read -p "Continue anyway? (y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
+fi
+
 TOTAL_BASELINES=${#BASELINE_MODELS[@]}
-TOTAL_PRF=$((${#RF_STRATEGY_VALUES[@]} * ${#RF_MODEL_VALUES[@]}))  # Strategy x RF Model combinations
+
+PRF_RUNS_PER_BASELINE=0
+for combo in "${RF_STRATEGY_TERMFILTER_COMBOS[@]}"; do
+    combo_strategy="${combo%%:*}"
+    combo_tf="${combo##*:}"
+    if [[ "$combo_strategy" == "VLLM-NARR" || "$combo_strategy" == "VLLM-NARR-PROB" ]] && [ "$SUPPORTS_NARRATIVE" != "true" ]; then
+        continue
+    fi
+    if [ "$combo_tf" = "vllmspans2" ] && [ "$SUPPORTS_NARRATIVE" != "true" ]; then
+        continue
+    fi
+    for rf_model in "${RF_MODEL_VALUES[@]}"; do
+        if [[ "$combo_strategy" == *-PROB ]] && [ "$rf_model" != "RM3" ]; then
+            continue
+        fi
+        PRF_RUNS_PER_BASELINE=$((PRF_RUNS_PER_BASELINE + 1))
+    done
+done
+TOTAL_PRF=$((PRF_RUNS_PER_BASELINE * TOTAL_BASELINES))
 if [ "$SKIP_RERANK" = true ]; then
     TOTAL_RERANK=0
     TOTAL_EXPERIMENTS=$((TOTAL_BASELINES + TOTAL_PRF))
 else
-    TOTAL_RERANK=$((${#DEPTHS[@]} * ${#BASELINE_MODELS[@]}))  # Rerank for each baseline
+    TOTAL_RERANK=$((${#DEPTHS[@]} * ${#BASELINE_MODELS[@]}))
     TOTAL_EXPERIMENTS=$((TOTAL_BASELINES + TOTAL_PRF + TOTAL_RERANK))
 fi
 
-# Calculate total grid configurations for informational purposes
 GRID_CONFIGS=$((${#DEPTHS[@]} * ${#E_VALUES[@]} * ${#LAMBDA_VALUES[@]}))
 TOTAL_PRF_CONFIGS=$((GRID_CONFIGS * TOTAL_PRF))
 
@@ -101,13 +120,9 @@ else
 fi
 echo ""
 
-# read -p "Press Enter to start..."
-
-# Counter for progress
 COUNTER=0
 START_TIME=$(date +%s)
 
-# Run baseline experiments (LMDirichlet and/or BM25)
 echo ""
 echo -e "${BLUE}=== Part 1: Baseline Models ===${NC}"
 echo ""
@@ -128,13 +143,11 @@ for baseline_model in "${BASELINE_MODELS[@]}"; do
     echo ""
 done
 
-# Run MonoT5 Reranker experiments (only if not skipped)
 if [ "$SKIP_RERANK" = false ]; then
     echo ""
     echo -e "${BLUE}=== Part 2: MonoT5 Reranker (no PRF) ===${NC}"
     echo ""
 
-    # Run MonoT5 Reranker experiments for each baseline and depth
     for baseline_model in "${BASELINE_MODELS[@]}"; do
         for depth in "${DEPTHS[@]}"; do
             COUNTER=$((COUNTER + 1))
@@ -164,67 +177,75 @@ echo ""
 echo -e "${BLUE}=== Part 3: PRF with LLM Strategies (Grid Search Mode) ===${NC}"
 echo ""
 
-# Build parameter strings for grid search
 DEPTHS_STR=$(IFS=,; echo "${DEPTHS[*]}")
 E_VALUES_STR=$(IFS=,; echo "${E_VALUES[*]}")
 LAMBDA_VALUES_STR=$(IFS=,; echo "${LAMBDA_VALUES[*]}")
 
-# Run PRF experiments with internal grid search (one Java invocation per strategy x RF model)
-for RF_STRATEGY in "${RF_STRATEGY_VALUES[@]}"; do
-    for RF_MODEL in "${RF_MODEL_VALUES[@]}"; do
-        COUNTER=$((COUNTER + 1))
-        
-        echo -e "${BLUE}========================================${NC}"
-        echo -e "${BLUE}  ${RF_STRATEGY} + ${RF_MODEL} Grid Search Experiment${NC}"
-        echo -e "${BLUE}========================================${NC}"
-        echo ""
-        echo "Configuration:"
-        echo "  Index: $INDEX_PATH"
-        echo "  Topics: $TOPICS_PATH"
-        echo "  Output: $RUN_FOLDER"
-        echo "  Baseline: $DEFAULT_BASELINE_MODEL (for PRF experiments)"
-        echo "  RF Strategy: $RF_STRATEGY"
-        echo "  RF Model: $RF_MODEL"
-        echo ""
-        echo "Grid parameters:"
-        echo "  Depths: $DEPTHS_STR"
-        echo "  E values: $E_VALUES_STR"
-        echo "  Lambda values: $LAMBDA_VALUES_STR"
-        echo ""
-        
-        echo -e "${GREEN}[$COUNTER/$TOTAL_EXPERIMENTS]${NC} Running ${RF_STRATEGY} + ${RF_MODEL} PRF grid search..."
-        
-        # Prepare additional parameters based on RF strategy
-        ADDITIONAL_PARAMS=""
-        case "$RF_STRATEGY" in
-            "ORACLE"|"ORACLE-K")
-                ADDITIONAL_PARAMS="--qrels $QRELS_PATH"
-                ;;
-            "MONOT5"|"MONOT5-PROB"|"VLLM"|"VLLM-PROB")
-                ADDITIONAL_PARAMS="--cache_dir $CACHE_DIR"
-                ;;
-        esac
-        
-        java -cp "$JAR_PATH" org.irlab.llmprf.searcher.TRECSearcherLucene search \
-            --index "$INDEX_PATH" \
-            --topics "$TOPICS_PATH" \
-            --runsOutputFolder "$RUN_FOLDER" \
-            --baseline_model "$DEFAULT_BASELINE_MODEL" \
-            --rerank_method prf \
-            --prf_strategy "$RF_STRATEGY" \
-            --prf_model "$RF_MODEL" \
-            --grid_search \
-            --depths "$DEPTHS_STR" \
-            --e_values "$E_VALUES_STR" \
-            --lambdas "$LAMBDA_VALUES_STR" \
-            $ADDITIONAL_PARAMS \
-        
-        echo -e "${GREEN}✓${NC} Completed ${RF_STRATEGY} + ${RF_MODEL} grid search"
-        echo ""
+for BASELINE_MODEL in "${BASELINE_MODELS[@]}"; do
+    for combo in "${RF_STRATEGY_TERMFILTER_COMBOS[@]}"; do
+        RF_STRATEGY="${combo%%:*}"
+        TERM_FILTER="${combo##*:}"
+
+        if [[ "$RF_STRATEGY" == "VLLM-NARR" || "$RF_STRATEGY" == "VLLM-NARR-PROB" || "$RF_STRATEGY" == "VLLM-NARR-JUDGESPANS" ]] && [ "$SUPPORTS_NARRATIVE" != "true" ]; then
+            echo -e "${YELLOW}Skipping $RF_STRATEGY (dataset '$INDEX' has no narratives)${NC}"
+            continue
+        fi
+        if [ "$TERM_FILTER" = "vllmspans2" ] && [ "$SUPPORTS_NARRATIVE" != "true" ]; then
+            echo -e "${YELLOW}Skipping ${RF_STRATEGY}:${TERM_FILTER} (dataset '$INDEX' has no narratives)${NC}"
+            continue
+        fi
+
+        for RF_MODEL in "${RF_MODEL_VALUES[@]}"; do
+            if [[ "$RF_STRATEGY" == *-PROB ]] && [ "$RF_MODEL" != "RM3" ]; then
+                echo -e "${YELLOW}Skipping ${RF_STRATEGY}:${TERM_FILTER} + ${RF_MODEL} (logit only applies to RM3)${NC}"
+                continue
+            fi
+
+            COUNTER=$((COUNTER + 1))
+
+            echo -e "${BLUE}========================================${NC}"
+            echo -e "${BLUE}  ${BASELINE_MODEL} + ${RF_STRATEGY} + ${RF_MODEL} + termFilter=${TERM_FILTER}${NC}"
+            echo -e "${BLUE}========================================${NC}"
+
+            echo -e "${GREEN}[$COUNTER/$TOTAL_EXPERIMENTS]${NC} Running..."
+
+            ADDITIONAL_PARAMS="--term_filter $TERM_FILTER"
+            case "$RF_STRATEGY" in
+                "ORACLE-K")
+                    ADDITIONAL_PARAMS="$ADDITIONAL_PARAMS --qrels $QRELS_PATH"
+                    ;;
+                "MONOT5"|"MONOT5-PROB"|"VLLM"|"VLLM-PROB"|"VLLM-NARR"|"VLLM-NARR-PROB"|"VLLM-JUDGESPANS"|"VLLM-NARR-JUDGESPANS")
+                    ADDITIONAL_PARAMS="$ADDITIONAL_PARAMS --cache_dir $CACHE_DIR"
+                    ;;
+            esac
+
+            DEPTHS_ARG="$DEPTHS_STR"
+            if [[ "$TERM_FILTER" == vllm* ]]; then
+                if [[ "$RF_STRATEGY" != "MONOT5"* && "$RF_STRATEGY" != "VLLM"* ]]; then
+                    ADDITIONAL_PARAMS="$ADDITIONAL_PARAMS --cache_dir $CACHE_DIR"
+                fi
+            fi
+
+            java -cp "$JAR_PATH" org.irlab.llmprf.searcher.TRECSearcherLucene search \
+                --index "$INDEX_PATH" \
+                --topics "$TOPICS_PATH" \
+                --runsOutputFolder "$RUN_FOLDER" \
+                --baseline_model "$BASELINE_MODEL" \
+                --rerank_method prf \
+                --prf_strategy "$RF_STRATEGY" \
+                --prf_model "$RF_MODEL" \
+                --grid_search \
+                --depths "$DEPTHS_ARG" \
+                --e_values "$E_VALUES_STR" \
+                --lambdas "$LAMBDA_VALUES_STR" \
+                $ADDITIONAL_PARAMS
+
+            echo -e "${GREEN}✓${NC} Completed"
+            echo ""
+        done
     done
 done
 
-# Final summary
 END_TIME=$(date +%s)
 TOTAL_TIME=$((END_TIME - START_TIME))
 HOURS=$((TOTAL_TIME / 3600))
@@ -240,7 +261,7 @@ echo "Summary:"
 echo "  Total Java invocations: $TOTAL_EXPERIMENTS"
 echo "  Baseline models tested: ${BASELINE_MODELS[*]}"
 echo "  RF models tested: ${RF_MODEL_VALUES[*]}"
-echo "  RF strategies tested: ${RF_STRATEGY_VALUES[*]}"
+echo "  RF strategy:term_filter combos tested: ${RF_STRATEGY_TERMFILTER_COMBOS[*]}"
 echo "  Total configurations: $((TOTAL_BASELINES + TOTAL_RERANK + TOTAL_PRF_CONFIGS))"
 if [ "$SKIP_RERANK" = true ]; then
     echo "  (MonoT5 Reranker experiments were skipped)"

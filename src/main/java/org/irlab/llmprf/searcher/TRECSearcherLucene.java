@@ -32,6 +32,9 @@ import org.irlab.llmprf.searcher.util.scorers.LLMCache;
 import org.irlab.llmprf.searcher.util.scorers.LLMResult;
 import org.irlab.llmprf.searcher.util.scorers.MonoT5Cache;
 import org.irlab.llmprf.searcher.util.scorers.VLLMCache;
+import org.irlab.llmprf.searcher.util.scorers.TermsProvider;
+import org.irlab.llmprf.searcher.util.scorers.VLLMSpansCache;
+import org.irlab.llmprf.searcher.util.scorers.VLLMJudgeSpansCache;
 
 import java.io.*;
 import java.nio.file.Paths;
@@ -39,6 +42,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
+import java.util.stream.Collectors;
 
 public class TRECSearcherLucene {
 
@@ -52,15 +56,9 @@ public class TRECSearcherLucene {
   private static final Analyzer analyzer = new StandardAnalyzer(EnglishAnalyzer.ENGLISH_STOP_WORDS_SET);
   private static Map<Integer, Set<Integer>> oracle;
 
-  // ThreadLocal StatsProvider pool - each thread gets its own instance
   private static ThreadLocal<StatsProvider> statsProviderThreadLocal = new ThreadLocal<>();
-  private static IndexReader sharedReader; // Shared reader for creating per-thread StatsProviders
+  private static IndexReader sharedReader;
 
-  /**
-   * Get thread-local StatsProvider. Creates a new one if this thread doesn't have
-   * one yet.
-   * This allows parallel processing without StatsProvider contention.
-   */
   private static StatsProvider getThreadLocalStatsProvider() {
     StatsProvider provider = statsProviderThreadLocal.get();
     if (provider == null) {
@@ -75,7 +73,6 @@ public class TRECSearcherLucene {
     String topicsPath = null;
     String runsOutputFolder = null;
 
-    // Ranking model used as baseline for reranking. Default is LMDirichlet.
     String baselineModel = "LMDirichlet";
 
     String qrelsPath = null;
@@ -84,18 +81,21 @@ public class TRECSearcherLucene {
     String rerankMethod = "none";
     String rfStrategy = "prf";
     String prfModel = "RM3";
+    String termFilter = "none";
 
     int rerankDepth = 100;
     int e = 20;
     double lambda = 0.0;
 
-    // Grid search parameters
     boolean gridSearch = false;
     String depthsStr = null;
     String eValuesStr = null;
     String lambdasStr = null;
 
-    // Parse arguments
+    String topicId = null;
+    int topN = 10;
+    String compareSpec = null;
+
     for (int i = 0; i < args.length; i++) {
       switch (args[i]) {
         case "--index":
@@ -146,13 +146,23 @@ public class TRECSearcherLucene {
         case "--lambdas":
           lambdasStr = args[++i];
           break;
+        case "--term_filter":
+          termFilter = args[++i];
+          break;
+        case "--topic_id":
+          topicId = args[++i];
+          break;
+        case "--top_n":
+          topN = Integer.parseInt(args[++i]);
+          break;
+        case "--compare":
+          compareSpec = args[++i];
+          break;
       }
     }
 
-    // Validate required arguments
     validateRequiredArguments(indexPath, topicsPath, runsOutputFolder);
 
-    // Parse grid search parameters
     int[] depths = { rerankDepth };
     int[] eValues = { e };
     double[] lambdas = { lambda };
@@ -180,42 +190,60 @@ public class TRECSearcherLucene {
       }
     }
 
-    // Open index
     System.out.println("Opening index: " + indexPath);
     IndexReader reader = DirectoryReader.open(FSDirectory.open(Paths.get(indexPath)));
-    sharedReader = reader; // Store for thread-local StatsProvider creation
+    sharedReader = reader;
     IndexSearcher searcher = new IndexSearcher(reader);
     searcher.setSimilarity(createSimilarity(baselineModel));
 
-    // Parse topics
     System.out.println("Parsing topics: " + topicsPath);
     List<Topic> topics = TRECUtils.parseTRECTopics(topicsPath);
 
-    // Load oracle qrels
     if (rfStrategy.contains("ORACLE")) {
       System.out.println("Parsing qrels for oracle run: " + qrelsPath);
       oracle = loadOracleRelevance(qrelsPath, searcher);
     }
 
-    // Create main thread's stats provider (others will be created on-demand per thread)
     StatsProvider statsProvider = new StatsProvider(searcher.getIndexReader());
-    statsProviderThreadLocal.set(statsProvider); // Set for main thread
+    statsProviderThreadLocal.set(statsProvider);
 
-    // Initialize caches once for all configurations based on strategy
     LLMCache monoT5Cache = null;
     LLMCache vllmCache = null;
+    LLMCache vllmNarrCache = null;
+    TermsProvider termsProvider = null;
 
-    // Initialize cache for PRF strategies
     if (rfStrategy.equals("MONOT5") || rfStrategy.equals("MONOT5-PROB") || rerankMethod.equals("monot5")) {
       System.out.println("Initializing MonoT5 cache from " + cacheDir);
       monoT5Cache = new MonoT5Cache(cacheDir);
     } else if (rfStrategy.equals("VLLM") || rfStrategy.equals("VLLM-PROB")) {
       System.out.println("Initializing VLLM cache...");
       vllmCache = new VLLMCache(cacheDir);
+    } else if (rfStrategy.equals("VLLM-NARR") || rfStrategy.equals("VLLM-NARR-PROB")) {
+      System.out.println("Initializing VLLM narrative cache...");
+      vllmNarrCache = new VLLMCache(cacheDir, "vllm_narr_cache.tsv");
+    } else if (rfStrategy.equals("VLLM-JUDGESPANS")) {
+      System.out.println("Initializing VLLM judge+spans cache...");
+      VLLMJudgeSpansCache judgeSpansCache = new VLLMJudgeSpansCache(cacheDir, false);
+      vllmCache = judgeSpansCache.asLLMCache();
+      if (termFilter.equals("vllmjudgespans")) {
+        termsProvider = judgeSpansCache.asTermsProvider();
+      }
+    } else if (rfStrategy.equals("VLLM-NARR-JUDGESPANS")) {
+      System.out.println("Initializing VLLM judge+spans cache (narrative)...");
+      VLLMJudgeSpansCache judgeSpansCache = new VLLMJudgeSpansCache(cacheDir, true);
+      vllmNarrCache = judgeSpansCache.asLLMCache();
+      if (termFilter.equals("vllmjudgespans")) {
+        termsProvider = judgeSpansCache.asTermsProvider();
+      }
+    }
+    if (termFilter.equals("vllmspans2")) {
+      System.out.println("Initializing VLLM spans cache...");
+      termsProvider = new VLLMSpansCache(cacheDir);
+    } else if (termFilter.equals("vllmspans2-nonarr")) {
+      System.out.println("Initializing VLLM spans cache (no narrative)...");
+      termsProvider = new VLLMSpansCache(cacheDir, false);
     }
 
-    // Grid search loop - optimized to compute RM3 expansion once per (depth, e)
-    // combination
     int totalConfigs = depths.length * eValues.length * lambdas.length;
     int currentConfig = 0;
     int skipped = 0;
@@ -243,7 +271,6 @@ public class TRECSearcherLucene {
     long startTime = System.currentTimeMillis();
 
     if (rerankMethod.equals("none")) {
-      // Baseline run
       runConfigurationBatch(topics,
                             searcher,
                             runsOutputFolder,
@@ -251,17 +278,19 @@ public class TRECSearcherLucene {
                             rerankMethod,
                             rfStrategy,
                             prfModel,
+                            termFilter,
                             rerankDepth,
                             e,
                             new double[] { lambda },
                             monoT5Cache,
                             vllmCache,
+                            vllmNarrCache,
+                            termsProvider,
                             0,
                             1);
     }
 
     if (rerankMethod.equals("monot5")) {
-      // MonoT5 reranking
       runConfigurationBatch(topics,
                             searcher,
                             runsOutputFolder,
@@ -269,11 +298,14 @@ public class TRECSearcherLucene {
                             rerankMethod,
                             rfStrategy,
                             prfModel,
+                            termFilter,
                             rerankDepth,
                             e,
                             new double[] { lambda },
                             monoT5Cache,
                             vllmCache,
+                            vllmNarrCache,
+                            termsProvider,
                             0,
                             1);
     }
@@ -288,43 +320,54 @@ public class TRECSearcherLucene {
                                 rerankMethod,
                                 rfStrategy,
                                 prfModel,
+                                termFilter,
                                 depth,
                                 eVal,
                                 lambdas,
                                 monoT5Cache,
                                 vllmCache,
+                                vllmNarrCache,
+                                termsProvider,
                                 currentConfig,
                                 totalConfigs);
 
-          // Update counters
-          currentConfig += lambdas.length;
-
-          // Count how many were actually processed (not skipped)
           for (double lambdaVal : lambdas) {
-            String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, prfModel, depth, lambdaVal, eVal);
-            String trecRunPath = runsOutputFolder + "/" + runName;
-            File outputFile = new File(trecRunPath);
+            String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, prfModel, termFilter, depth, lambdaVal, eVal);
+            File outputFile = new File(runsOutputFolder + "/" + runName);
             if (outputFile.exists()) {
               skipped++;
             }
           }
+
+          currentConfig += lambdas.length;
         }
       }
     }
 
-    // Close caches
+    if (rerankMethod.equals("dump_terms")) {
+      if (topicId == null || compareSpec == null) {
+        throw new IllegalArgumentException("--rerank_method dump_terms requires --topic_id and --compare");
+      }
+      runDumpTerms(topics, searcher, statsProvider, topicId, compareSpec, topN, cacheDir, qrelsPath);
+    }
+
     if (monoT5Cache != null) {
       monoT5Cache.close();
     }
     if (vllmCache != null) {
       vllmCache.close();
     }
+    if (vllmNarrCache != null) {
+      vllmNarrCache.close();
+    }
+    if (termsProvider != null) {
+      termsProvider.close();
+    }
 
     reader.close();
 
-    // Summary
     long endTime = System.currentTimeMillis();
-    long totalTime = (endTime - startTime) / 1000; // seconds
+    long totalTime = (endTime - startTime) / 1000;
 
     System.out.println("\n========================================");
     System.out.println("Search Completed!");
@@ -337,13 +380,11 @@ public class TRECSearcherLucene {
     System.out.println("========================================");
   }
 
-  /**
-   * Build the run name based on the rerank method and parameters.
-   */
   private static String buildRunName(String baselineModel, String rerankMethod, String rfStrategy, String rfModel,
-                                     int depth, double lambda, int e) {
+                                     String termFilter, int depth, double lambda, int e) {
 
     String baselineStr = baselineModel.equals("LMDirichlet") ? "LMDirichlet-2000" : baselineModel;
+    String termFilterSuffix = termFilter.equals("none") ? "" : "_termFilter-" + termFilter.toUpperCase();
 
     switch (rerankMethod) {
       case "none" -> {
@@ -353,47 +394,25 @@ public class TRECSearcherLucene {
         return String.format("%s_%s_rerank-monoT5_topK-%d", baselineStr, SEARCH_FIELD, depth);
       }
       case "prf" -> {
-        if (rfStrategy.equals("ORACLE")) {
-          return String.format("%s_%s_prf-%s_rfStrategy-%s_rfModel-%s_prfSmoothing-Additive-%.4f_lambda-%.2f_e-%d",
-                               baselineStr,
-                               SEARCH_FIELD,
-                               true,
-                               rfStrategy,
-                               rfModel,
-                               smoothingParameter,
-                               lambda,
-                               e);
-
-        } else {
-          return String.format(
-              "%s_%s_prf-%s_rfStrategy-%s_rfModel-%s_prfSmoothing-Additive-%.4f_topK-%d_lambda-%.2f_e-%d",
-              baselineStr,
-              SEARCH_FIELD,
-              true,
-              rfStrategy,
-              rfModel,
-              smoothingParameter,
-              depth,
-              lambda,
-              e);
-
-        }
+        return String.format(
+            "%s_%s_prf-%s_rfStrategy-%s_rfModel-%s_prfSmoothing-Additive-%.4f_topK-%d_lambda-%.2f_e-%d%s",
+            baselineStr, SEARCH_FIELD, true, rfStrategy, rfModel,
+            smoothingParameter, depth, lambda, e, termFilterSuffix);
       }
       default -> throw new IllegalArgumentException("Unknown rerank method: " + rerankMethod);
     }
   }
 
-  // Method to run a batch of configurations for all lambda values with same (depth, e)
-  // This optimizes by computing the expanded query once and then varying only lambda
   private static void runConfigurationBatch(List<Topic> topics, IndexSearcher searcher, String trecRunFolder,
                                             String baselineModel, String rerankMethod, String rfStrategy,
-                                            String rfModel, int depth, int e, double[] lambdas, LLMCache monoT5Cache,
-                                            LLMCache vllmCache, int startConfig, int totalConfigs) throws Exception {
+                                            String rfModel, String termFilter, int depth, int e, double[] lambdas,
+                                            LLMCache monoT5Cache, LLMCache vllmCache, LLMCache vllmNarrCache,
+                                            TermsProvider termsProvider, int startConfig, int totalConfigs)
+      throws Exception {
 
-    // First, check which lambda values actually need processing (BEFORE computing)
     List<Double> neededLambdas = new ArrayList<>();
     for (double lambda : lambdas) {
-      String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, depth, lambda, e);
+      String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, termFilter, depth, lambda, e);
 
       String trecRunPath = trecRunFolder + "/" + runName;
       File outputFile = new File(trecRunPath);
@@ -403,7 +422,6 @@ public class TRECSearcherLucene {
       }
     }
 
-    // If all files exist, skip this entire (depth, e) combination
     if (neededLambdas.isEmpty()) {
       System.out.printf("All %d lambda configs exist for depth=%d, e=%d - skipping RM3 computation%n",
                         lambdas.length,
@@ -418,47 +436,66 @@ public class TRECSearcherLucene {
     System.out.printf("Will process configurations from %d to %d: %n",
                       startConfig + 1,
                       startConfig + neededLambdas.size());
-    // Report which lambdas need processing
     System.out.printf("Need to process %d/%d lambda values for depth=%d, e=%d%n",
                       neededLambdas.size(),
                       lambdas.length,
                       depth,
                       e);
 
-    // Initialize output files (create empty files for all needed lambdas to avoid append issues)
     for (double lambda : neededLambdas) {
-      String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, depth, lambda, e);
+      String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, termFilter, depth, lambda, e);
       String trecRunPath = trecRunFolder + "/" + runName;
 
-      // Create empty file (overwrite if exists from incomplete run)
       new FileWriter(trecRunPath, false).close();
     }
 
-    // Process each topic IN PARALLEL for better performance
-    // Use thread-safe maps to collect results per lambda
     Map<Double, List<String>> resultsPerLambda = new ConcurrentHashMap<>();
     for (double lambda : neededLambdas) {
       resultsPerLambda.put(lambda, new CopyOnWriteArrayList<>());
     }
 
-    // Determine if we should use parallel processing
-    // When caches are empty for LLM strategies, use sequential to avoid overloading
     boolean useParallel = true;
-    final String parallelMode; // Final for use in lambda
+    final String parallelMode;
+
+    int firstQueryId = topics.isEmpty() ? -1 : Integer.parseInt(topics.get(0).num);
 
     if (rerankMethod.equals("monot5") || (rfStrategy.equals("MONOT5") || rfStrategy.equals("MONOT5-PROB"))) {
-      if ((monoT5Cache != null && monoT5Cache.isEmpty()) || trecRunFolder.contains("test")) {
+      if ((monoT5Cache != null && !monoT5Cache.containsQuery(firstQueryId)) || trecRunFolder.contains("test")) {
         useParallel = false;
-        parallelMode = "sequential (MonoT5 cache empty or test run)";
-        System.out.println("⚠ MonoT5 cache is empty or test run - using SEQUENTIAL processing to avoid overload");
+        parallelMode = "sequential (MonoT5 cache cold for first topic or test run)";
+        System.out.println("⚠ MonoT5 cache cold for first topic or test run - using SEQUENTIAL processing to avoid overload");
       } else {
         parallelMode = "parallel";
       }
     } else if (rfStrategy.equals("VLLM") || rfStrategy.equals("VLLM-PROB")) {
-      if ((vllmCache != null && vllmCache.isEmpty()) || trecRunFolder.contains("test")) {
+      if ((vllmCache != null && !vllmCache.containsQuery(firstQueryId)) || trecRunFolder.contains("test")) {
         useParallel = false;
-        parallelMode = "sequential (VLLM cache empty or test run)";
-        System.out.println("⚠ VLLM cache is empty or test run - using SEQUENTIAL processing to avoid overload");
+        parallelMode = "sequential (VLLM cache cold for first topic or test run)";
+        System.out.println("⚠ VLLM cache cold for first topic or test run - using SEQUENTIAL processing to avoid overload");
+      } else {
+        parallelMode = "parallel";
+      }
+    } else if (rfStrategy.equals("VLLM-NARR") || rfStrategy.equals("VLLM-NARR-PROB")) {
+      if ((vllmNarrCache != null && !vllmNarrCache.containsQuery(firstQueryId)) || trecRunFolder.contains("test")) {
+        useParallel = false;
+        parallelMode = "sequential (VLLM-NARR cache cold for first topic or test run)";
+        System.out.println("⚠ VLLM-NARR cache cold for first topic or test run - using SEQUENTIAL processing to avoid overload");
+      } else {
+        parallelMode = "parallel";
+      }
+    } else if (rfStrategy.equals("VLLM-JUDGESPANS")) {
+      if ((vllmCache != null && !vllmCache.containsQuery(firstQueryId)) || trecRunFolder.contains("test")) {
+        useParallel = false;
+        parallelMode = "sequential (VLLM judge+spans cache cold for first topic or test run)";
+        System.out.println("⚠ VLLM judge+spans cache cold for first topic or test run - using SEQUENTIAL processing to avoid overload");
+      } else {
+        parallelMode = "parallel";
+      }
+    } else if (rfStrategy.equals("VLLM-NARR-JUDGESPANS")) {
+      if ((vllmNarrCache != null && !vllmNarrCache.containsQuery(firstQueryId)) || trecRunFolder.contains("test")) {
+        useParallel = false;
+        parallelMode = "sequential (VLLM-NARR judge+spans cache cold for first topic or test run)";
+        System.out.println("⚠ VLLM-NARR judge+spans cache cold for first topic or test run - using SEQUENTIAL processing to avoid overload");
       } else {
         parallelMode = "parallel";
       }
@@ -466,13 +503,16 @@ public class TRECSearcherLucene {
       parallelMode = "parallel";
     }
 
-    // Choose stream based on cache state
+    if (!termFilter.equals("none") && termsProvider != null
+        && (!termsProvider.containsQuery(firstQueryId) || trecRunFolder.contains("test"))) {
+      useParallel = false;
+      System.out.println("⚠ Terms provider cache cold or test run - using SEQUENTIAL processing to avoid overload");
+    }
+
     Stream<Topic> topicStream = useParallel ? topics.parallelStream() : topics.stream();
 
-    // Process topics (parallel or sequential based on cache state)
     topicStream.forEach(topic -> {
       try {
-        // Get thread-local StatsProvider (creates one if needed for this thread)
         StatsProvider threadStatsProvider = getThreadLocalStatsProvider();
 
         String queryStr = topic.title;
@@ -480,14 +520,11 @@ public class TRECSearcherLucene {
         QueryParser parser = new QueryParser(SEARCH_FIELD, analyzer);
         Query query = parser.parse(QueryParser.escape(queryStr));
 
-        // Get initial results
         TopDocs results = searcher.search(query, 1000);
 
-        // Process based on rerank method
         if (rerankMethod.equals("none")) {
-          // Baseline - just use initial results for all lambdas
           for (double lambda : neededLambdas) {
-            String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, depth, lambda, e);
+            String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, termFilter, depth, lambda, e);
 
             StringBuilder resultStr = new StringBuilder();
             for (int i = 0; i < Math.min(1000, results.scoreDocs.length); i++) {
@@ -501,11 +538,9 @@ public class TRECSearcherLucene {
           }
 
         } else if (rerankMethod.equals("monot5")) {
-          // MonoT5 reranking
           for (double lambda : neededLambdas) {
-            String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, depth, lambda, e);
+            String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, termFilter, depth, lambda, e);
 
-            // Rerank with MonoT5
             TopDocs rerankedResults = rerankWithMonoT5(queryStr,
                                                        null,
                                                        Integer.parseInt(topic.num),
@@ -526,23 +561,22 @@ public class TRECSearcherLucene {
           }
 
         } else if (rerankMethod.equals("prf")) {
-          // PRF with query expansion
-          // Compute expanded query weights ONCE for this topic and (depth, e) combination
-          // Using thread-local StatsProvider to avoid contention
           TermWeights expandedQueryWeights = queryExpansion(queryStr,
-                                                            null,
+                                                            topic.narrative,
                                                             Integer.parseInt(topic.num),
                                                             results,
                                                             rfStrategy,
+                                                            termFilter,
                                                             searcher,
                                                             threadStatsProvider,
                                                             rfModel,
                                                             depth,
                                                             e,
                                                             monoT5Cache,
-                                                            vllmCache);
+                                                            vllmCache,
+                                                            vllmNarrCache,
+                                                            termsProvider);
 
-          // Get original query weights
           List<String> processedTerms = new ArrayList<>();
           try (TokenStream tokenStream = analyzer.tokenStream(SEARCH_FIELD, queryStr)) {
             tokenStream.reset();
@@ -553,36 +587,26 @@ public class TRECSearcherLucene {
           }
           TermWeights originalQueryWeights = TermWeights.fromTerms(processedTerms).scaleToL1Norm();
 
-          // For each lambda value that needs processing, interpolate and search
           for (double lambda : neededLambdas) {
-            // Interpolate original query with expanded query
-            String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, depth, lambda, e);
+            String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, termFilter, depth, lambda, e);
 
-            // Interpolate: lambda controls weight of ORIGINAL query
-            // lambda=1.0 → 100% original (no PRF)
-            // lambda=0.0 → 100% expanded (full PRF)
             TermWeights finalQuery = TermWeights.interpolate(originalQueryWeights, expandedQueryWeights, lambda);
 
-            // Build query string with weights
-            // Escape individual terms, then add boost weights
             StringBuilder queryBuilder = new StringBuilder();
             finalQuery.forEach((term, weight) -> {
               String escapedTerm = QueryParser.escape(term);
               queryBuilder.append(escapedTerm).append("^").append(String.format("%.10f ", weight));
             });
 
-            // Execute search with interpolated query
             Query expandedQuery = parser.parse(queryBuilder.toString());
             TopDocs expandedResults = searcher.search(expandedQuery, 1000);
 
-            // Collect results as strings (to write later in order)
             if (expandedResults != null) {
               StringBuilder resultStr = new StringBuilder();
               for (int i = 0; i < Math.min(1000, expandedResults.scoreDocs.length); i++) {
                 ScoreDoc scoreDoc = expandedResults.scoreDocs[i];
                 Document doc = searcher.storedFields().document(scoreDoc.doc);
                 String docno = doc.get(DOCID_FIELD);
-                // Optimization: full runName for rank 1, "--" for the rest to save space
                 String tag = (i == 0) ? runName : "--";
                 resultStr.append(String.format("%s Q0 %s %d %.6f %s\n", topic.num, docno, i + 1, scoreDoc.score, tag));
               }
@@ -591,7 +615,6 @@ public class TRECSearcherLucene {
           }
         }
 
-        // Progress reporting (synchronized to avoid interleaved output)
         synchronized (System.out) {
           int processed = (int) resultsPerLambda.values().stream().mapToInt(List::size).average().orElse(0);
           if (processed % 10 == 0 || processed == topics.size()) {
@@ -610,11 +633,9 @@ public class TRECSearcherLucene {
       }
     });
 
-    // Write all results to files in topic order (sequential, after parallel
-    // processing)
     System.out.println("Writing results to files...");
     for (double lambda : neededLambdas) {
-      String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, depth, lambda, e);
+      String runName = buildRunName(baselineModel, rerankMethod, rfStrategy, rfModel, termFilter, depth, lambda, e);
       String trecRunPath = trecRunFolder + "/" + runName;
 
       try (BufferedWriter runWriter = new BufferedWriter(new FileWriter(trecRunPath, false))) {
@@ -627,36 +648,29 @@ public class TRECSearcherLucene {
 
   }
 
-  // Rerank top results using MonoT5
   private static TopDocs rerankWithMonoT5(String queryText, String narrative, int queryId, TopDocs initialResults,
                                           IndexSearcher searcher, int depth, LLMCache cache) throws IOException {
 
     List<ScoredDoc> scoredDocs = new ArrayList<>();
     int docsToRerank = Math.min(depth, initialResults.scoreDocs.length);
 
-    // Rerank top-depth documents with MonoT5 using score
     for (int i = 0; i < docsToRerank; i++) {
       ScoreDoc sd = initialResults.scoreDocs[i];
       Document doc = searcher.storedFields().document(sd.doc);
       String docText = doc.get(SEARCH_FIELD);
 
-      // Get result from cache or evaluate
       LLMResult result = cache.get(queryId, sd.doc, queryText, narrative, docText);
 
-      // Use the score (prob_true) for reranking
       scoredDocs.add(new ScoredDoc(sd.doc, result.score));
     }
 
-    // Add remaining documents (not reranked) with low scores
     for (int i = docsToRerank; i < initialResults.scoreDocs.length; i++) {
       ScoreDoc sd = initialResults.scoreDocs[i];
       scoredDocs.add(new ScoredDoc(sd.doc, -1000 - i));
     }
 
-    // Sort by MonoT5 scores (descending)
     scoredDocs.sort((a, b) -> Double.compare(b.score, a.score));
 
-    // Convert back to TopDocs
     ScoreDoc[] rerankedScoreDocs = new ScoreDoc[scoredDocs.size()];
     for (int i = 0; i < scoredDocs.size(); i++) {
       ScoredDoc sd = scoredDocs.get(i);
@@ -679,10 +693,9 @@ public class TRECSearcherLucene {
   private static Map<Integer, Double> filterRelevantDocuments(int queryid, String queryText, String narrative,
                                                               TopDocs results, String rfStrategy, int k,
                                                               IndexSearcher searcher, LLMCache monoT5Cache,
-                                                              LLMCache vllmCache) throws IOException {
+                                                              LLMCache vllmCache, LLMCache vllmNarrCache) throws IOException {
     switch (rfStrategy) {
       case "PRF":
-        // we took the top k documents as relevant returning a map with docid and score:
         Map<Integer, Double> relevantDocs = new HashMap<>();
         for (int i = 0; i < Math.min(k, results.scoreDocs.length); i++) {
           ScoreDoc sd = results.scoreDocs[i];
@@ -690,12 +703,8 @@ public class TRECSearcherLucene {
         }
 
         return relevantDocs;
-      case "ORACLE":
-        // Oracle without limit - collect all oracle-relevant documents
-        return filterWithOracle(queryid, results, Integer.MAX_VALUE);
       case "ORACLE-K":
-        // Oracle with limit - collect up to k oracle-relevant documents
-        return filterWithOracle(queryid, results, k);
+        return filterWithOracle(queryid, results, k, k);
       case "MONOT5":
         return filterWithLLM(queryid,
                              queryText,
@@ -704,7 +713,7 @@ public class TRECSearcherLucene {
                              k,
                              searcher,
                              monoT5Cache,
-                             (sd, result) -> (double) sd.score); // Use retrieval score
+                             (sd, result) -> (double) sd.score);
       case "MONOT5-PROB":
         return filterWithLLM(queryid,
                              queryText,
@@ -713,33 +722,66 @@ public class TRECSearcherLucene {
                              k,
                              searcher,
                              monoT5Cache,
-                             (sd, result) -> result.probTrue); // Use LLM probability
+                             (sd, result) -> result.probTrue);
       case "VLLM":
         return filterWithLLM(queryid,
                              queryText,
-                             narrative,
+                             null,
                              results,
                              k,
                              searcher,
                              vllmCache,
-                             (sd, result) -> (double) sd.score); // Use retrieval score
+                             (sd, result) -> (double) sd.score);
       case "VLLM-PROB":
+        return filterWithLLM(queryid,
+                             queryText,
+                             null,
+                             results,
+                             k,
+                             searcher,
+                             vllmCache,
+                             (sd, result) -> result.probTrue);
+      case "VLLM-NARR":
         return filterWithLLM(queryid,
                              queryText,
                              narrative,
                              results,
                              k,
                              searcher,
+                             vllmNarrCache,
+                             (sd, result) -> (double) sd.score);
+      case "VLLM-NARR-PROB":
+        return filterWithLLM(queryid,
+                             queryText,
+                             narrative,
+                             results,
+                             k,
+                             searcher,
+                             vllmNarrCache,
+                             (sd, result) -> result.probTrue);
+      case "VLLM-JUDGESPANS":
+        return filterWithLLM(queryid,
+                             queryText,
+                             null,
+                             results,
+                             k,
+                             searcher,
                              vllmCache,
-                             (sd, result) -> result.probTrue); // Use LLM probability
+                             (sd, result) -> (double) sd.score);
+      case "VLLM-NARR-JUDGESPANS":
+        return filterWithLLM(queryid,
+                             queryText,
+                             narrative,
+                             results,
+                             k,
+                             searcher,
+                             vllmNarrCache,
+                             (sd, result) -> (double) sd.score);
       default:
         throw new IllegalArgumentException("Unknown RF strategy: " + rfStrategy);
     }
   }
 
-  /**
-   * Functional interface for determining the score to use for a document.
-   */
   @FunctionalInterface
   private interface ScoreFunction {
     double getScore(ScoreDoc sd, LLMResult result);
@@ -755,11 +797,9 @@ public class TRECSearcherLucene {
       Document doc = searcher.storedFields().document(sd.doc);
       String docText = doc.get(SEARCH_FIELD);
 
-      // Get result from LLM cache
       LLMResult result = llmCache.get(queryid, sd.doc, queryText, narrative, docText);
 
       if (result.isRelevant) {
-        // Use the score determined by the scoreFunction
         filteredDocs.put(sd.doc, scoreFunction.getScore(sd, result));
       }
     }
@@ -767,22 +807,23 @@ public class TRECSearcherLucene {
     return filteredDocs;
   }
 
-  private static Map<Integer, Double> filterWithOracle(int queryid, TopDocs results, int maxDocs) {
+  private static Map<Integer, Double> filterWithOracle(int queryid, TopDocs results, int depth, int maxDocs) {
     Map<Integer, Double> oracleDocs = new HashMap<>();
 
     if (!oracle.containsKey(queryid)) {
-      return oracleDocs; // No oracle judgments for this query
+      return oracleDocs;
     }
 
     Set<Integer> relevantDocIds = oracle.get(queryid);
     int count = 0;
 
-    for (ScoreDoc sd : results.scoreDocs) {
+    for (int i = 0; i < Math.min(depth, results.scoreDocs.length); i++) {
+      ScoreDoc sd = results.scoreDocs[i];
       if (relevantDocIds.contains(sd.doc)) {
         oracleDocs.put(sd.doc, (double) sd.score);
         count++;
         if (count >= maxDocs) {
-          break; // Stop after collecting maxDocs relevant documents
+          break;
         }
       }
     }
@@ -791,9 +832,10 @@ public class TRECSearcherLucene {
   }
 
   private static TermWeights queryExpansion(String originalQuery, String narrative, int queryId, TopDocs results,
-                                            String rfStrategy, IndexSearcher searcher, StatsProvider statsProvider,
-                                            String rfModel, int k, int e, LLMCache monoT5Cache,
-                                            LLMCache vllmCache) throws IOException {
+                                            String rfStrategy, String termFilter, IndexSearcher searcher,
+                                            StatsProvider statsProvider, String rfModel, int k, int e,
+                                            LLMCache monoT5Cache, LLMCache vllmCache, LLMCache vllmNarrCache,
+                                            TermsProvider termsProvider) throws IOException {
     Map<Integer, Double> prfDocs = filterRelevantDocuments(queryId,
                                                            originalQuery,
                                                            narrative,
@@ -802,10 +844,40 @@ public class TRECSearcherLucene {
                                                            k,
                                                            searcher,
                                                            monoT5Cache,
-                                                           vllmCache);
+                                                           vllmCache,
+                                                           vllmNarrCache);
     Smoothing smoothing = new AdditiveSmoothing(smoothingParameter, SEARCH_FIELD, statsProvider);
 
-    // Create relevance feedback model based on rfModel parameter
+    boolean isSpanLM = termFilter.equals("vllmspans2") || termFilter.equals("vllmspans2-nonarr")
+        || termFilter.equals("vllmjudgespans");
+    Map<Integer, Set<String>> allowedTerms = null;
+    Map<Integer, Map<String, Integer>> spanTermFreqs = null;
+    if (!termFilter.equals("none") && !isSpanLM && termsProvider != null) {
+      allowedTerms = new HashMap<>();
+      for (Map.Entry<Integer, Double> entry : prfDocs.entrySet()) {
+        int docId = entry.getKey();
+        Document doc = searcher.storedFields().document(docId);
+        String docText = doc.get(SEARCH_FIELD);
+        List<String> rawTerms = termsProvider.get(queryId, docId, originalQuery, narrative, docText);
+        Set<String> analyzed = analyzeAndIntersect(rawTerms, docId, smoothing);
+        if (!analyzed.isEmpty()) {
+          allowedTerms.put(docId, analyzed);
+        }
+      }
+    } else if (isSpanLM && termsProvider != null) {
+      spanTermFreqs = new HashMap<>();
+      for (Map.Entry<Integer, Double> entry : prfDocs.entrySet()) {
+        int docId = entry.getKey();
+        Document doc = searcher.storedFields().document(docId);
+        String docText = doc.get(SEARCH_FIELD);
+        List<String> spans = termsProvider.get(queryId, docId, originalQuery, narrative, docText);
+        Map<String, Integer> tf = analyzeSpansToTF(spans, smoothing);
+        if (!tf.isEmpty()) {
+          spanTermFreqs.put(docId, tf);
+        }
+      }
+    }
+
     RelevanceFeedback feedbackModel;
     switch (rfModel.toUpperCase()) {
       case "RM3":
@@ -823,15 +895,53 @@ public class TRECSearcherLucene {
                                            + ". Supported models: RM3, DMM, MEDMM");
     }
 
-    // Extract query terms for feedback models that need them
     List<String> queryTerms = extractQueryTerms(originalQuery);
 
-    return feedbackModel.getTermWeights(prfDocs, queryTerms).pruneToSize(e).scaleToL1Norm();
+    TermWeights weights = (spanTermFreqs != null)
+        ? feedbackModel.getTermWeightsFromSpans(prfDocs, queryTerms, spanTermFreqs)
+        : feedbackModel.getTermWeights(prfDocs, queryTerms, allowedTerms);
+    return weights.pruneToSize(e).scaleToL1Norm();
+  }
+
+  private static Set<String> analyzeAndIntersect(List<String> rawTerms, int docId, Smoothing smoothing) {
+    Set<String> docVocab = smoothing.getDocTerms(docId);
+    Set<String> analyzed = new HashSet<>();
+    for (String raw : rawTerms) {
+      try (TokenStream ts = analyzer.tokenStream(SEARCH_FIELD, raw)) {
+        ts.reset();
+        while (ts.incrementToken()) {
+          String term = ts.getAttribute(CharTermAttribute.class).toString();
+          if (docVocab.contains(term)) {
+            analyzed.add(term);
+          }
+        }
+        ts.end();
+      } catch (IOException ex) {
+      }
+    }
+    return analyzed;
+  }
+
+  private static Map<String, Integer> analyzeSpansToTF(List<String> spans, Smoothing smoothing) {
+    Map<String, Integer> tf = new HashMap<>();
+    for (String span : spans) {
+      try (TokenStream ts = analyzer.tokenStream(SEARCH_FIELD, span)) {
+        ts.reset();
+        while (ts.incrementToken()) {
+          String term = ts.getAttribute(CharTermAttribute.class).toString();
+          if (smoothing.termExists(term)) {
+            tf.merge(term, 1, Integer::sum);
+          }
+        }
+        ts.end();
+      } catch (IOException ex) {
+      }
+    }
+    return tf;
   }
 
   private static Map<Integer, Set<Integer>> loadOracleRelevance(String pathToQrelsFile,
                                                                 IndexSearcher searcher) throws IOException, ParseException {
-    // Read TREC qrels file and build map of query_id -> Set<Integer> (docids)
     Map<Integer, Set<Integer>> oracleRelevance = new HashMap<>();
     try (BufferedReader br = new BufferedReader(new FileReader(pathToQrelsFile))) {
       String line;
@@ -841,8 +951,7 @@ public class TRECSearcherLucene {
           Integer queryId = Integer.parseInt(parts[0]);
           String docno = parts[2];
           int relevance = Integer.parseInt(parts[3]);
-          if (relevance > 0) { // Only consider relevant documents
-            // Find docid from index using docno
+          if (relevance > 0) {
             QueryParser docnoParser = new QueryParser(DOCID_FIELD, analyzer);
             Query docnoQuery = docnoParser.parse(QueryParser.escape(docno));
 
@@ -870,6 +979,188 @@ public class TRECSearcherLucene {
       throw new RuntimeException("Error extracting query terms", e);
     }
     return processedTerms;
+  }
+
+  private static class MethodSpec {
+    final String label;
+    final String strategy;
+    final String termFilter;
+    final String rfModel;
+    final int depth;
+    final int e;
+    final double lambda;
+
+    MethodSpec(String label, String strategy, String termFilter, String rfModel,
+              int depth, int e, double lambda) {
+      this.label = label;
+      this.strategy = strategy;
+      this.termFilter = termFilter;
+      this.rfModel = rfModel;
+      this.depth = depth;
+      this.e = e;
+      this.lambda = lambda;
+    }
+  }
+
+  @FunctionalInterface
+  private interface IOSupplier<T> {
+    T get() throws IOException;
+  }
+
+  private static <T> T unchecked(IOSupplier<T> supplier) {
+    try {
+      return supplier.get();
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  private static List<MethodSpec> parseCompareSpecs(String compareSpec) {
+    List<MethodSpec> specs = new ArrayList<>();
+    for (String entry : compareSpec.split(";")) {
+      if (entry.trim().isEmpty()) continue;
+      String[] parts = entry.split(":", 7);
+      if (parts.length != 7) {
+        throw new IllegalArgumentException(
+            "Invalid --compare entry (expected label:strategy:term_filter:rf_model:depth:e:lambda): " + entry);
+      }
+      specs.add(new MethodSpec(parts[0], parts[1], parts[2], parts[3],
+          Integer.parseInt(parts[4]), Integer.parseInt(parts[5]), Double.parseDouble(parts[6])));
+    }
+    return specs;
+  }
+
+  private static List<Map.Entry<String, Double>> sortedTopN(TermWeights weights, int n) {
+    List<Map.Entry<String, Double>> entries = new ArrayList<>();
+    weights.forEach((term, w) -> entries.add(new AbstractMap.SimpleEntry<>(term, w)));
+    entries.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));
+    return entries.subList(0, Math.min(n, entries.size()));
+  }
+
+  private static String escapeLatex(String s) {
+    return s.replace("\\", "\\textbackslash ")
+            .replace("&", "\\&")
+            .replace("%", "\\%")
+            .replace("$", "\\$")
+            .replace("#", "\\#")
+            .replace("_", "\\_");
+  }
+
+  private static void runDumpTerms(List<Topic> topics, IndexSearcher searcher, StatsProvider statsProvider,
+                                   String topicId, String compareSpec, int topN, String cacheDir,
+                                   String qrelsPath) throws Exception {
+    Topic topic = topics.stream().filter(t -> t.num.equals(topicId)).findFirst()
+        .orElseThrow(() -> new IllegalArgumentException("Topic not found: " + topicId));
+
+    List<MethodSpec> specs = parseCompareSpecs(compareSpec);
+
+    if (qrelsPath != null && oracle == null && specs.stream().anyMatch(s -> s.strategy.contains("ORACLE"))) {
+      System.out.println("Parsing qrels for oracle spec: " + qrelsPath);
+      oracle = loadOracleRelevance(qrelsPath, searcher);
+    }
+
+    String queryStr = topic.title;
+    QueryParser parser = new QueryParser(SEARCH_FIELD, analyzer);
+    Query query = parser.parse(QueryParser.escape(queryStr));
+    TopDocs results = searcher.search(query, 1000);
+    TermWeights originalQueryWeights = TermWeights.fromTerms(extractQueryTerms(queryStr)).scaleToL1Norm();
+
+    Map<String, LLMCache> llmCacheByStrategy = new HashMap<>();
+    Map<String, VLLMJudgeSpansCache> judgeSpansCacheByStrategy = new HashMap<>();
+    Map<String, TermsProvider> termsProviderByFilter = new HashMap<>();
+
+    StringBuilder out = new StringBuilder();
+    out.append("\\begin{table*}[t]\n\\centering\n");
+    out.append("\\caption{}\n");
+    out.append(String.format("\\label{tab:terms-%s}\n", topic.num));
+
+    double subWidth = 0.95 / Math.min(specs.size(), 3);
+    for (int si = 0; si < specs.size(); si++) {
+      MethodSpec spec = specs.get(si);
+
+      LLMCache monoT5 = null;
+      LLMCache vllm = null;
+      LLMCache vllmNarr = null;
+      TermsProvider tp = null;
+
+      switch (spec.strategy) {
+        case "MONOT5": case "MONOT5-PROB":
+          monoT5 = llmCacheByStrategy.computeIfAbsent("MONOT5",
+              k -> unchecked(() -> new MonoT5Cache(cacheDir)));
+          break;
+        case "VLLM": case "VLLM-PROB":
+          vllm = llmCacheByStrategy.computeIfAbsent("VLLM",
+              k -> unchecked(() -> new VLLMCache(cacheDir)));
+          break;
+        case "VLLM-NARR": case "VLLM-NARR-PROB":
+          vllmNarr = llmCacheByStrategy.computeIfAbsent("VLLM-NARR",
+              k -> unchecked(() -> new VLLMCache(cacheDir, "vllm_narr_cache.tsv")));
+          break;
+        case "VLLM-JUDGESPANS": {
+          VLLMJudgeSpansCache jsc = judgeSpansCacheByStrategy.computeIfAbsent("VLLM-JUDGESPANS",
+              k -> unchecked(() -> new VLLMJudgeSpansCache(cacheDir, false)));
+          vllm = jsc.asLLMCache();
+          if (spec.termFilter.equals("vllmjudgespans")) tp = jsc.asTermsProvider();
+          break;
+        }
+        case "VLLM-NARR-JUDGESPANS": {
+          VLLMJudgeSpansCache jsc = judgeSpansCacheByStrategy.computeIfAbsent("VLLM-NARR-JUDGESPANS",
+              k -> unchecked(() -> new VLLMJudgeSpansCache(cacheDir, true)));
+          vllmNarr = jsc.asLLMCache();
+          if (spec.termFilter.equals("vllmjudgespans")) tp = jsc.asTermsProvider();
+          break;
+        }
+        default:
+      }
+
+      if (tp == null && !spec.termFilter.equals("none") && !spec.termFilter.equals("vllmjudgespans")) {
+        final String tf = spec.termFilter;
+        tp = termsProviderByFilter.computeIfAbsent(tf, k -> {
+          switch (k) {
+            case "vllmspans2":
+              return unchecked(() -> new VLLMSpansCache(cacheDir));
+            case "vllmspans2-nonarr":
+              return unchecked(() -> new VLLMSpansCache(cacheDir, false));
+            default:
+              throw new IllegalArgumentException("Unknown term_filter: " + k);
+          }
+        });
+      }
+
+      TermWeights expanded = queryExpansion(queryStr, topic.narrative, Integer.parseInt(topic.num), results,
+          spec.strategy, spec.termFilter, searcher, statsProvider, spec.rfModel, spec.depth, spec.e,
+          monoT5, vllm, vllmNarr, tp);
+
+      TermWeights finalWeights = TermWeights.interpolate(originalQueryWeights, expanded, spec.lambda);
+      List<Map.Entry<String, Double>> topTerms = sortedTopN(finalWeights, topN);
+
+      out.append(String.format("\\begin{subtable}[t]{%.3f\\textwidth}\n\\centering\n\\small\n", subWidth));
+      out.append(String.format("\\caption{%s}\n", escapeLatex(spec.label)));
+      out.append("\\begin{tabular}{@{}lr@{}}\n\\toprule\nTerm & Weight \\\\\n\\midrule\n");
+      for (Map.Entry<String, Double> entry : topTerms) {
+        out.append(String.format("%s & %.4f \\\\\n", escapeLatex(entry.getKey()), entry.getValue()));
+      }
+      out.append("\\bottomrule\n\\end{tabular}\n\\end{subtable}");
+
+      boolean lastInRow = (si + 1) % 3 == 0 || si == specs.size() - 1;
+      if (lastInRow) {
+        out.append("\n");
+        if (si != specs.size() - 1) {
+          out.append("\\par\\bigskip\n");
+        }
+      } else {
+        out.append("%\n\\hfill\n");
+      }
+    }
+
+    out.append("\\end{table*}\n");
+
+    System.out.println();
+    System.out.println(out);
+
+    for (LLMCache c : llmCacheByStrategy.values()) c.close();
+    for (VLLMJudgeSpansCache c : judgeSpansCacheByStrategy.values()) c.close();
+    for (TermsProvider c : termsProviderByFilter.values()) c.close();
   }
 
   private static Similarity createSimilarity(String baselineModel) {
@@ -920,20 +1211,14 @@ public class TRECSearcherLucene {
 
     System.err.println("\nOptional arguments:");
     System.err.println("  --baseline_model <model>      Baseline model: LMDirichlet|BM25 (default: LMDirichlet)");
-    System.err.println("  --search_by <field>           Search field (default: content)");
-    System.err.println("  --rerank_method <method>      Reranking method: none|monot5|prf (default: none)");
-    System.err.println("  --prf_strategy <strategy>     PRF strategy: none|prf|ORACLE|MONOT5|VLLM (default: none)");
-    System.err.println("  --rf_model <model>            RF model: RM3|DMM|MEDMM (default: RM3)");
-    System.err.println("  --prf_smoothing_model <model> PRF smoothing model (default: Additive)");
-    System.err.println("  --prf_smoothing_parameter <p> PRF smoothing parameter (default: 0.1)");
+    System.err.println("  --rerank_method <method>      Reranking method: none|monot5|prf|dump_terms (default: none)");
+    System.err.println("  --prf_strategy <strategy>     PRF strategy: PRF|ORACLE-K|MONOT5|MONOT5-PROB|VLLM|VLLM-PROB|");
+    System.err.println("                                VLLM-NARR|VLLM-NARR-PROB|VLLM-JUDGESPANS|VLLM-NARR-JUDGESPANS");
+    System.err.println("  --prf_model <model>           RF model: RM3|DMM|MEDMM (default: RM3)");
+    System.err.println("  --term_filter <filter>        Term filter: none|vllmspans2|vllmspans2-nonarr|vllmjudgespans");
     System.err.println("  --rerank_depth <depth>        Reranking depth (default: 100)");
     System.err.println("  --lambda <lambda>             Lambda for interpolation (default: 0.0)");
     System.err.println("  -e <e>                        Number of expansion terms (default: 20)");
-
-    System.err.println("\nRF model specific arguments:");
-    System.err.println("  --dmm_lambda <lambda>         Lambda parameter for DMM (default: 0.5)");
-    System.err.println("  --medmm_lambda <lambda>       Lambda parameter for MEDMM (default: 0.5)");
-    System.err.println("  --medmm_beta <beta>           Beta parameter for MEDMM (default: 1.0)");
 
     System.err.println("\nGrid search arguments:");
     System.err.println("  --grid_search                 Enable grid search mode");
@@ -941,8 +1226,13 @@ public class TRECSearcherLucene {
     System.err.println("  --e_values <e_values>         Comma-separated e values");
     System.err.println("  --lambdas <lambdas>           Comma-separated lambda values");
 
+    System.err.println("\ndump_terms mode arguments:");
+    System.err.println("  --topic_id <id>                Topic number to dump expansion terms for");
+    System.err.println("  --top_n <n>                    Number of top terms to show per method (default: 10)");
+    System.err.println("  --compare <spec>                ';'-separated label:strategy:term_filter:rf_model:depth:e:lambda entries");
+
     System.err.println("\nConditional arguments (required for some modes):");
-    System.err.println("  --qrels <path>                Path to qrels file (required for ORACLE strategy)");
+    System.err.println("  --qrels <path>                Path to qrels file (required for ORACLE-K strategy)");
     System.err.println("  --cache_dir <path>            Path to cache directory (required for LLM strategies)");
   }
 }

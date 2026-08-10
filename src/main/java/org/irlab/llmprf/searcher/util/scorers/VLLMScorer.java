@@ -12,19 +12,11 @@ import java.net.URI;
 import java.net.URL;
 import java.util.Map;
 
-/**
- * Helper to call the VLLM service running on localhost:8080
- * Expects the service at POST /prob with JSON {"prompt":...}
- * and a JSON response containing {"p_true":..., "p_false":...}
- */
 public class VLLMScorer {
 
-  private static final String SERVICE_URL = "http://localhost:8080/prob";
+  private static final String SERVICE_URL = "http://" + System.getenv().getOrDefault("VLLM_HOST", "localhost:8080") + "/prob";
   private static final ObjectMapper objectMapper = new ObjectMapper();
 
-  /**
-   * Result from VLLM evaluation with probability scores
-   */
   public static class VLLMResult {
     public final boolean isRelevant;
     public final double probTrue;
@@ -37,13 +29,6 @@ public class VLLMScorer {
     }
   }
 
-  /**
-   * Evaluate document relevance and return full result with probabilities
-   *
-   * @param query    The search query
-   * @param document The document text to evaluate
-   * @return VLLMResult containing relevance decision and probabilities
-   */
   public static VLLMResult evaluate(String query, String narrative, String document) {
     try {
       URL url = URI.create(SERVICE_URL).toURL();
@@ -51,11 +36,8 @@ public class VLLMScorer {
       con.setRequestMethod("POST");
       con.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
       con.setDoOutput(true);
-      // We eliminate any line breaks and excessive spaces
       String processedDocument = document.replaceAll("\\s+", " ").trim();
-      // we also replace "|" and "-" with " "
       processedDocument = processedDocument.replaceAll("[|\\-]+", " ");
-      // Create prompt in the format: [document] ... [query] ... Relevant:
       String prompt = String.format("You are an expert TREC assessor. Your task is to judge relevance.\n\n"
                                     + "Instructions:\n"
                                     + "\t1. Read the query carefully.\n"
@@ -66,9 +48,10 @@ public class VLLMScorer {
                                     + (narrative != null && !narrative.isEmpty() ? String.format(
           "Assessor instructions:\n%s\n\n",
           narrative) : "")
-                                    + "Document:\n%s\n", query.trim(), processedDocument);
+                                    + "Document:\n%s\n",
+                                    query.trim(),
+                                    processedDocument);
 
-      // Create JSON payload using Jackson
       ObjectNode payload = objectMapper.createObjectNode();
       payload.put("prompt", prompt);
 
@@ -95,18 +78,10 @@ public class VLLMScorer {
     }
   }
 
-  /**
-   * Convenience method: returns only boolean relevance
-   * Document is considered relevant if p_true > p_false
-   */
   public static boolean isRelevant(String query, String narrative, String document) {
     return evaluate(query, narrative, document).isRelevant;
   }
 
-  /**
-   * Parse the JSON response from VLLM service
-   * Expected format: {"p_true": 0.679..., "p_false": 0.320...}
-   */
   private static VLLMResult parseResponse(String json) {
     try {
       Map<String, Object> response = objectMapper.readValue(json, new TypeReference<>() {
@@ -115,7 +90,6 @@ public class VLLMScorer {
       double probTrue = getDoubleValue(response, "p_true");
       double probFalse = getDoubleValue(response, "p_false");
 
-      // Document is relevant if probability of "true" is higher than "false"
       boolean isRelevant = probTrue > probFalse;
 
       return new VLLMResult(isRelevant, probTrue, probFalse);
@@ -126,9 +100,6 @@ public class VLLMScorer {
     }
   }
 
-  /**
-   * Extract double value from response map, handling various numeric types
-   */
   private static double getDoubleValue(Map<String, Object> map, String key) {
     Object value = map.get(key);
     if (value instanceof Number) {

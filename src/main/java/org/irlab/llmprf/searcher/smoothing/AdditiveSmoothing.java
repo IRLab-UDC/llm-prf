@@ -38,4 +38,16 @@ public final class AdditiveSmoothing extends AbstractSmoothing {
 
     return (termFreq + smoothingParameter) / (docLength + smoothingParameter * lexiconSize);
   }
+
+  @Override
+  public double computeSpanSmoothedProb(String term, int spanTF, long spanLen) {
+    long lexiconSize;
+    if (cacheLexiconSize.containsKey(docField)) {
+      lexiconSize = cacheLexiconSize.get(docField);
+    } else {
+      lexiconSize = statsProvider.getCollectionLexiconSize(docField);
+      cacheLexiconSize.put(docField, lexiconSize);
+    }
+    return (spanTF + smoothingParameter) / (spanLen + smoothingParameter * lexiconSize);
+  }
 }

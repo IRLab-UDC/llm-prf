@@ -13,7 +13,6 @@ public class Main {
 
     String command = args[0].toLowerCase();
 
-    // Create new args array without the first command argument
     String[] commandArgs = new String[args.length - 1];
     System.arraycopy(args, 1, commandArgs, 0, args.length - 1);
 
@@ -49,8 +48,8 @@ public class Main {
 
   private static void printUsage() {
     System.out.println("Usage:");
-    System.out.println("  java -jar ecir26.jar index --dataset <path> --index <path>");
-    System.out.println("  java -jar ecir26.jar search [search arguments...]");
+    System.out.println("  java -jar llmprf-1.0-jar-with-dependencies.jar index --dataset <path> --index <path>");
+    System.out.println("  java -jar llmprf-1.0-jar-with-dependencies.jar search [search arguments...]");
     System.out.println();
     System.out.println("Commands:");
     System.out.println("  index   - Index TREC documents using TRECIndexerLuceneRM");

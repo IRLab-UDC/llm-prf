@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-// Name should be RM1 since it is more accurate. Interpolation is made outside this class.
 public final class RM3 extends AbstractRelevanceFeedback {
 
   public RM3(String docField, Smoothing smoothing) {
@@ -18,14 +17,40 @@ public final class RM3 extends AbstractRelevanceFeedback {
 
   @Override
   public TermWeights getTermWeights(final Map<Integer, Double> relevanceSet, final List<String> queryTerms) {
-    // Get all vocab from docs in the relevance set.
-    Set<String> vocab = getVocab(relevanceSet);
+    return getTermWeights(relevanceSet, queryTerms, null);
+  }
 
-    // Compute weight for each term.
+  @Override
+  public TermWeights getTermWeights(final Map<Integer, Double> relevanceSet, final List<String> queryTerms,
+                                    final Map<Integer, Set<String>> allowedTerms) {
+    Set<String> vocab = getVocab(relevanceSet, allowedTerms);
+
     TermWeights vocabWeights = new TermWeights();
     for (String term : vocab) {
       MutableDouble pwr = new MutableDouble(0);
       relevanceSet.forEach((doc, ql) -> pwr.add(computeTermDocWeight(term, doc, ql)));
+      vocabWeights.setTermWeight(term, pwr.doubleValue());
+    }
+
+    return vocabWeights;
+  }
+
+  @Override
+  public TermWeights getTermWeightsFromSpans(final Map<Integer, Double> relevanceSet, final List<String> queryTerms,
+                                              final Map<Integer, Map<String, Integer>> spanTermFreqs) {
+    Set<String> vocab = getVocabFromSpans(relevanceSet, spanTermFreqs);
+    Map<Integer, Long> spanLen = spanLengths(spanTermFreqs);
+
+    TermWeights vocabWeights = new TermWeights();
+    for (String term : vocab) {
+      MutableDouble pwr = new MutableDouble(0);
+      relevanceSet.forEach((doc, ql) -> {
+        Map<String, Integer> tf = spanTermFreqs.get(doc);
+        int stf = (tf != null) ? tf.getOrDefault(term, 0) : 0;
+        long slen = spanLen.getOrDefault(doc, 1L);
+        double pwd = smoothing.computeSpanSmoothedProb(term, stf, slen);
+        pwr.add(Math.exp(Math.log(pwd) + ql));
+      });
       vocabWeights.setTermWeight(term, pwr.doubleValue());
     }
 

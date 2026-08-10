@@ -4,10 +4,6 @@ import java.io.*;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Cache manager for MonoT5 scorer results.
- * Manages persistent cache with all MonoT5 metrics.
- */
 public class MonoT5Cache implements LLMCache {
   private final String cacheDir;
   private final String cacheFile;
@@ -22,7 +18,6 @@ public class MonoT5Cache implements LLMCache {
     new File(cacheDir).mkdirs();
     this.cache = new HashMap<>();
 
-    // Load existing cache: query_id \t doc_id \t prediction \t logit_true \t logit_false \t prob_true \t prob_false \t score
     File cacheFileObj = new File(cacheFile);
     if (cacheFileObj.exists()) {
       try (BufferedReader reader = new BufferedReader(new FileReader(cacheFileObj))) {
@@ -41,7 +36,6 @@ public class MonoT5Cache implements LLMCache {
       }
     }
     System.out.println("Loaded MonoT5 cache with " + cache.size() + " entries from " + cacheFile);
-    // Open for appending
     this.cacheWriter = new BufferedWriter(new FileWriter(cacheFile, true));
   }
 
@@ -53,10 +47,8 @@ public class MonoT5Cache implements LLMCache {
       return cache.get(cacheKey);
     }
 
-    // Not in cache, evaluate with MonoT5
     MonoT5Scorer.MonoT5Result monoResult = MonoT5Scorer.evaluate(queryText, docText);
 
-    // Write to cache file: query_id \t doc_id \t prediction \t logit_true \t logit_false \t prob_true \t prob_false \t score
     cacheWriter.write(String.format("%d\t%d\t%s\t%.16f\t%.16f\t%.16f\t%.16f\t%.16f\n",
                                     queryId,
                                     docId,
@@ -68,19 +60,21 @@ public class MonoT5Cache implements LLMCache {
                                     monoResult.score));
     cacheWriter.flush();
 
-    // Convert to LLMResult and store in memory cache
     LLMResult result = new LLMResult(monoResult.isRelevant, monoResult.probTrue, monoResult.score);
     cache.put(cacheKey, result);
 
     return result;
   }
 
-  /**
-   * Returns true if the cache is empty (no entries loaded).
-   */
   @Override
   public boolean isEmpty() {
     return cache.isEmpty();
+  }
+
+  @Override
+  public boolean containsQuery(int queryId) {
+    String prefix = queryId + "_";
+    return cache.keySet().stream().anyMatch(k -> k.startsWith(prefix));
   }
 
   @Override

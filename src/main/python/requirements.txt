@@ -5,6 +5,9 @@ tiktoken
 sentencepiece
 protobuf
 vllm
+fastapi
+uvicorn
+pydantic
 pandas
-seaborn
-matplotlib
+numpy
+scipy

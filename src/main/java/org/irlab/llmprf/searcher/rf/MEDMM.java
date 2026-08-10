@@ -23,14 +23,17 @@ public class MEDMM extends AbstractRelevanceFeedback {
 
   @Override
   public TermWeights getTermWeights(final Map<Integer, Double> relevanceSet, final List<String> queryTerms) {
-    // Get all vocab from docs in the relevance set.
-    Set<String> vocab = getVocab(relevanceSet);
+    return getTermWeights(relevanceSet, queryTerms, null);
+  }
 
+  @Override
+  public TermWeights getTermWeights(final Map<Integer, Double> relevanceSet, final List<String> queryTerms,
+                                    final Map<Integer, Set<String>> allowedTerms) {
+    Set<String> vocab = getVocab(relevanceSet, allowedTerms);
     Int2DoubleMap docWeights = getDocWeights(relevanceSet, queryTerms);
 
     TermWeights vocabWeights = new TermWeights();
 
-    // For each term in the vocabulary, compute its weight.
     for (String term : vocab) {
       final MutableDouble sum = new MutableDouble(0);
       relevanceSet.forEach((doc, ql) -> {
@@ -39,7 +42,34 @@ public class MEDMM extends AbstractRelevanceFeedback {
       });
 
       final double backgroundProbLog = Math.log(smoothing.computeBackgroundProb(term));
+      final double pwf = (sum.doubleValue() - (lambda * backgroundProbLog)) / beta;
 
+      vocabWeights.setTermWeight(term, Math.exp(pwf));
+    }
+
+    return vocabWeights;
+  }
+
+  @Override
+  public TermWeights getTermWeightsFromSpans(final Map<Integer, Double> relevanceSet, final List<String> queryTerms,
+                                              final Map<Integer, Map<String, Integer>> spanTermFreqs) {
+    Set<String> vocab = getVocabFromSpans(relevanceSet, spanTermFreqs);
+    Map<Integer, Long> spanLen = spanLengths(spanTermFreqs);
+    Int2DoubleMap docWeights = getDocWeights(relevanceSet, queryTerms);
+
+    TermWeights vocabWeights = new TermWeights();
+
+    for (String term : vocab) {
+      final MutableDouble sum = new MutableDouble(0);
+      relevanceSet.forEach((doc, ql) -> {
+        Map<String, Integer> tf = spanTermFreqs.get(doc);
+        int stf = (tf != null) ? tf.getOrDefault(term, 0) : 0;
+        long slen = spanLen.getOrDefault(doc, 1L);
+        double spanProb = smoothing.computeSpanSmoothedProb(term, stf, slen);
+        sum.add(Math.log(spanProb) * docWeights.get(doc.intValue()));
+      });
+
+      final double backgroundProbLog = Math.log(smoothing.computeBackgroundProb(term));
       final double pwf = (sum.doubleValue() - (lambda * backgroundProbLog)) / beta;
 
       vocabWeights.setTermWeight(term, Math.exp(pwf));
@@ -53,10 +83,8 @@ public class MEDMM extends AbstractRelevanceFeedback {
     MutableDouble weightsSum = new MutableDouble(0);
 
     relevanceSet.forEach((doc, ql) -> {
-      // Compute Query Likelihood
       MutableDouble docql = new MutableDouble(0);
       for (String queryTerm : queryTerms) {
-        // Ignore documents that are out of the vocabulary.
         if (smoothing.termExists(queryTerm)) {
           docql.add(Math.log(smoothing.computeSmoothedProb(queryTerm, doc)));
         }
